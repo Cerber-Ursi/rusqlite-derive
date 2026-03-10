@@ -1,3 +1,5 @@
+use attribute_derive::FromAttr;
+
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -7,6 +9,18 @@ pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         Err(e) => e.into_compile_error(),
     }
     .into()
+}
+
+#[derive(FromAttr)]
+#[attribute(ident = rusqlite)]
+struct RusqliteTable {
+    from: Option<String>,
+}
+
+#[derive(FromAttr)]
+#[attribute(ident = rusqlite)]
+struct RusqliteColumn {
+    select: Option<String>,
 }
 
 fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -19,80 +33,33 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
     let name = input.ident;
 
-    let mut table_name = name.to_string();
-    for attr in input.attrs {
-        if attr.path().is_ident("rusqlite") {
-            let nested = attr.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-            )?;
-
-            for meta in nested {
-                let meta = meta.require_name_value()?;
-
-                if meta.path.is_ident("table") {
-                    let syn::Expr::Lit(lit) = &meta.value else {
-                        return Err(syn::Error::new_spanned(
-                            meta,
-                            "expected 'table = \"table-name\"",
-                        ));
-                    };
-
-                    let syn::Lit::Str(lit) = &lit.lit else {
-                        return Err(syn::Error::new_spanned(
-                            meta,
-                            "expected 'table = \"table-name\"",
-                        ));
-                    };
-
-                    table_name = lit.value();
-                }
-            }
-        }
-    }
+    let table_attr = RusqliteTable::from_attributes(&input.attrs)?;
+    let table_name = table_attr.from.unwrap_or_else(|| name.to_string());
 
     let mut columns = vec![];
     let mut fields = vec![];
 
     for (index, field) in data.fields.into_iter().enumerate() {
-        let name = field.ident.expect("TODO - support tuple structs");
+        let name = field.ident.as_ref().ok_or_else(|| {
+            syn::Error::new_spanned(
+                &field,
+                "only structs with named fields are supported for now",
+            )
+        })?;
 
-        let mut column = name.to_string();
-        for attr in field.attrs {
-            if attr.path().is_ident("rusqlite") {
-                let nested = attr.parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-                )?;
-
-                for meta in nested {
-                    let meta = meta.require_name_value()?;
-
-                    if meta.path.is_ident("table") {
-                        let syn::Expr::Lit(lit) = &meta.value else {
-                            return Err(syn::Error::new_spanned(
-                                meta,
-                                "expected 'table = \"table-name\"",
-                            ));
-                        };
-
-                        let syn::Lit::Str(lit) = &lit.lit else {
-                            return Err(syn::Error::new_spanned(
-                                meta,
-                                "expected 'table = \"table-name\"",
-                            ));
-                        };
-
-                        column = lit.value();
-                    }
-                }
-            }
-        }
+        let column_attr = RusqliteColumn::from_attributes(field.attrs)?;
+        let column = column_attr.select.unwrap_or_else(|| name.to_string());
 
         columns.push(column);
         fields.push(quote::quote! { #name: row.get(#index)?, });
     }
 
     let query_simple = format!("SELECT {} FROM {};", columns.join(", "), table_name);
-    let query_with_where = format!("SELECT {} FROM {} WHERE {{}};", columns.join(", "), table_name);
+    let query_with_where = format!(
+        "SELECT {} FROM {} WHERE {{}};",
+        columns.join(", "),
+        table_name
+    );
 
     let res = quote::quote! {
         impl ::rusqlite_derive::RusqliteFetch for #name {
