@@ -1,5 +1,39 @@
+//! Implementation of the `RusqliteFetch` derive macro.
+//!
+//! Applications should depend on and import the `rusqlite-derive` wrapper crate,
+//! which exposes both the derive and the trait it implements.
+
 use attribute_derive::FromAttr;
 
+/// Derives read helpers for a struct with named fields.
+///
+/// By default, the macro uses the struct name as the SQL `FROM` fragment and
+/// each field name as a select expression. The generated implementation executes
+/// statements equivalent to:
+///
+/// ```sql
+/// SELECT field_1, field_2 FROM StructName;
+/// SELECT field_1, field_2 FROM StructName WHERE <filter>;
+/// ```
+///
+/// Use `#[rusqlite(from = "...")]` on the struct to override the complete
+/// `FROM` fragment. Use `#[rusqlite(select = "...")]` on a field to override
+/// its select expression. These values are inserted as SQL, allowing qualified
+/// columns, expressions, aliases, and joins.
+///
+/// Selected values are decoded by field declaration order with
+/// `rusqlite::Row::get`.
+///
+/// # Security
+///
+/// `fetch_with_filter` inserts its filter argument into the statement verbatim.
+/// It provides no escaping or parameter binding, so the argument must never
+/// contain untrusted input.
+///
+/// # Limitations
+///
+/// The macro currently supports non-generic structs with one or more named
+/// fields only.
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
