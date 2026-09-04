@@ -2,7 +2,11 @@
 name = "rusqlite-derive"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 
 [dependencies]
 rusqlite = { version = "0.38.0", default-features = false }
 rusqlite-derive-impl = { version = "=0.1.0", path = "../impl" }
+
+[dev-dependencies]
+rusqlite = { version = "0.38.0", features = ["bundled"] }
