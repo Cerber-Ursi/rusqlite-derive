@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `NotDefault: Default` is not satisfied
+  --> tests/ui/fail/generic_missing_default.rs:15:21
+   |
+15 |     require_fetch::<Record<NotDefault>>();
+   |                     ^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `NotDefault`
+   |
+help: the trait `RusqliteFetch` is conditionally implemented for `Record<T>`
+  --> tests/ui/fail/generic_missing_default.rs:5:10
+   |
+ 5 | #[derive(RusqliteFetch)]
+   |          ^^^^^^^^^^^^^ unsatisfied requirement introduced here: `NotDefault: Default`
+note: required for `Record<NotDefault>` to implement `RusqliteFetch`
+  --> tests/ui/fail/generic_missing_default.rs:6:8
+   |
+ 5 | #[derive(RusqliteFetch)]
+   |          ------------- type parameter would need to implement `RusqliteFetch`
+ 6 | struct Record<T> {
+   |        ^^^^^^^^^
+   = help: consider manually implementing `RusqliteFetch` to avoid undesired bounds
+note: required by a bound in `require_fetch`
+  --> tests/ui/fail/generic_missing_default.rs:12:21
+   |
+12 | fn require_fetch<T: RusqliteFetch>() {}
+   |                     ^^^^^^^^^^^^^ required by this bound in `require_fetch`
+   = note: this error originates in the derive macro `RusqliteFetch` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider annotating `NotDefault` with `#[derive(Default)]`
+   |
+ 3 + #[derive(Default)]
+ 4 | struct NotDefault;
+   |

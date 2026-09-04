@@ -1,5 +1,0 @@
-error: generic structs are not supported for now
- --> tests/ui/fail/generic_struct.rs:4:14
-  |
-4 | struct Record<T> {
-  |              ^^^

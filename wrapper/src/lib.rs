@@ -32,9 +32,12 @@
 //!
 //! Put `#[rusqlite(from = "...")]` on a struct to customize its complete SQL
 //! `FROM` fragment. Put `#[rusqlite(select = "...")]` on a field to customize
-//! its select expression. Tuple structs are supported when every field has an
-//! explicit `select` expression. This supports qualified columns, expressions,
-//! and joins. See the [`RusqliteFetch`] derive for details and limitations.
+//! its select expression, or `#[rusqlite(default)]` to omit it from the query
+//! and initialize it with `Default::default()`. Tuple structs are supported when
+//! every non-default field has an explicit `select` expression. Generic structs
+//! are supported, including their existing bounds. This supports qualified
+//! columns, expressions, and joins. See the [`RusqliteFetch`] derive for details
+//! and limitations.
 //!
 //! # Filtering safely
 //!
@@ -47,8 +50,9 @@ pub use rusqlite_derive_impl::RusqliteFetch;
 /// Fetches values of a struct from SQLite.
 ///
 /// Implementations are normally generated with [`#[derive(RusqliteFetch)]`](derive@RusqliteFetch).
-/// The derive selects fields in declaration order and decodes each value through
-/// [`rusqlite::Row::get`].
+/// The derive selects non-default fields in declaration order and decodes each
+/// value through [`rusqlite::Row::get`]. Fields marked `#[rusqlite(default)]`
+/// are omitted from SQL and initialized with `Default::default()`.
 ///
 /// This trait is not intended to model writes or arbitrary queries. Use rusqlite
 /// directly when a query needs bound parameters, custom result handling, or

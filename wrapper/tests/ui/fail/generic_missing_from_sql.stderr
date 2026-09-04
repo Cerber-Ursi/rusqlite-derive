@@ -1,0 +1,34 @@
+error[E0277]: the trait bound `NotFromSql: FromSql` is not satisfied
+  --> tests/ui/fail/generic_missing_from_sql.rs:13:21
+   |
+13 |     require_fetch::<Record<NotFromSql>>();
+   |                     ^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `FromSql` is not implemented for `NotFromSql`
+  --> tests/ui/fail/generic_missing_from_sql.rs:3:1
+   |
+ 3 | struct NotFromSql;
+   | ^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `FromSql`:
+             Arc<[u8]>
+             Arc<str>
+             Box<[u8]>
+             Box<str>
+             Cow<'_, T>
+             NonZero<i16>
+             NonZero<i32>
+             NonZero<i64>
+           and $N others
+note: required for `Record<NotFromSql>` to implement `RusqliteFetch`
+  --> tests/ui/fail/generic_missing_from_sql.rs:6:8
+   |
+ 5 | #[derive(RusqliteFetch)]
+   |          ------------- type parameter would need to implement `RusqliteFetch`
+ 6 | struct Record<T> {
+   |        ^^^^^^^^^
+   = help: consider manually implementing `RusqliteFetch` to avoid undesired bounds
+note: required by a bound in `require_fetch`
+  --> tests/ui/fail/generic_missing_from_sql.rs:10:21
+   |
+10 | fn require_fetch<T: RusqliteFetch>() {}
+   |                     ^^^^^^^^^^^^^ required by this bound in `require_fetch`

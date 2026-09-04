@@ -65,7 +65,7 @@ SELECT id, name, active FROM users;
 SELECT id, name, active FROM users WHERE <filter>;
 ```
 
-Each selected value is decoded with `rusqlite::Row::get`, in struct field declaration order. Consequently, every field type must implement rusqlite's `FromSql`.
+Each selected value is decoded with `rusqlite::Row::get`, in struct field declaration order. Consequently, every selected field type must implement rusqlite's `FromSql`.
 
 ## Mapping SQL expressions
 
@@ -73,8 +73,10 @@ Without attributes, the Rust struct name is used as the `FROM` fragment and each
 
 - `#[rusqlite(from = "...")]` on the struct sets the complete SQL `FROM` fragment.
 - `#[rusqlite(select = "...")]` on a field sets that field's SQL select expression.
+- `#[rusqlite(default)]` omits a field from the query and initializes it with
+  `Default::default()`. It cannot be combined with `select`.
 
-Tuple structs are also supported, but every field must have an explicit `select` expression because unnamed fields have no column name to use by default:
+Tuple structs are also supported, but every non-default field must have an explicit `select` expression because unnamed fields have no column name to use by default:
 
 ```rust
 use rusqlite_derive::RusqliteFetch;
@@ -86,6 +88,29 @@ struct User(
     #[rusqlite(select = "name")] String,
 );
 ```
+
+Default fields are useful for marker values in generic structs. Generic parameters,
+lifetimes, const parameters, and existing `where` clauses are preserved by the
+generated implementation:
+
+```rust
+use std::marker::PhantomData;
+use rusqlite_derive::RusqliteFetch;
+
+#[derive(RusqliteFetch)]
+#[rusqlite(from = "users")]
+struct User<T, Marker> {
+    id: T,
+    name: String,
+    #[rusqlite(default)]
+    marker: PhantomData<Marker>,
+}
+```
+
+The generated implementation adds `FromSql` bounds for generic-dependent
+selected field types and `Default` bounds for generic-dependent default fields.
+Missing implementations on concrete field types are reported at that field's
+type rather than at the whole derive input.
 
 The attribute values are SQL fragments, not quoted identifiers. This makes aliases, expressions, and joins possible:
 
@@ -131,8 +156,8 @@ For dynamic values, use rusqlite directly with placeholders and bound parameters
 
 ## Current limitations
 
-- Only non-generic structs with one or more fields are supported; unit structs are not.
-- Every tuple struct field must specify `#[rusqlite(select = "...")]`.
+- Structs must have at least one field; unit structs are not supported.
+- Every non-default tuple struct field must specify `#[rusqlite(select = "...")]`.
 - Fetches return all matching rows as a `Vec`; pagination and streaming are not generated.
 - SQL identifiers and fragments are not validated or quoted by the macro.
 - `fetch_with_filter` has no parameter-binding API.

@@ -1,0 +1,11 @@
+error: `default` conflicts with mutually exclusive `select`
+ --> tests/ui/fail/conflicting_field_attributes.rs:5:34
+  |
+5 |     #[rusqlite(select = "value", default)]
+  |                                  ^^^^^^^
+
+error: `select` conflicts with mutually exclusive `default`
+ --> tests/ui/fail/conflicting_field_attributes.rs:5:16
+  |
+5 |     #[rusqlite(select = "value", default)]
+  |                ^^^^^^

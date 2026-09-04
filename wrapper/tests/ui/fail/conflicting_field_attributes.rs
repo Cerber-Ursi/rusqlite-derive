@@ -1,8 +1,9 @@
 use rusqlite_derive::RusqliteFetch;
 
 #[derive(RusqliteFetch)]
-struct Record<T> {
-    value: T,
+struct Record {
+    #[rusqlite(select = "value", default)]
+    value: i64,
 }
 
 fn main() {}

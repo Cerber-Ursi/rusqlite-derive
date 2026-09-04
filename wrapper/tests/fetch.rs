@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use rusqlite_derive::RusqliteFetch;
+use std::marker::PhantomData;
 
 #[derive(Debug, PartialEq, RusqliteFetch)]
 struct DefaultRecord {
@@ -45,6 +46,26 @@ struct ExpectedInteger {
 struct MissingTable {
     value: i64,
 }
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "generic_records")]
+struct GenericRecord<T> {
+    id: T,
+    label: String,
+}
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "generic_records")]
+struct DefaultedRecord {
+    id: i64,
+    #[rusqlite(default)]
+    skipped: bool,
+    label: String,
+}
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "generic_records")]
+struct AllDefault<T>(#[rusqlite(default)] PhantomData<T>);
 
 fn records_connection() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -169,6 +190,77 @@ fn custom_select_expressions_and_joins_are_used() {
             upper_name: "ADA".into(),
             team_name: "Compilers".into(),
         }]
+    );
+}
+
+#[test]
+fn generic_fields_are_decoded() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE generic_records (id INTEGER NOT NULL, label TEXT NOT NULL);
+         INSERT INTO generic_records VALUES (8, 'generic'), (9, 'second');",
+    )
+    .unwrap();
+
+    assert_eq!(
+        GenericRecord::<i64>::fetch(&conn).unwrap(),
+        vec![
+            GenericRecord {
+                id: 8,
+                label: "generic".into(),
+            },
+            GenericRecord {
+                id: 9,
+                label: "second".into(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn generic_field_decode_errors_are_returned() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE generic_records (id TEXT NOT NULL, label TEXT NOT NULL);
+         INSERT INTO generic_records VALUES ('not an integer', 'generic');",
+    )
+    .unwrap();
+
+    let error = GenericRecord::<i64>::fetch(&conn).unwrap_err();
+    assert!(matches!(error, rusqlite::Error::InvalidColumnType(..)));
+}
+
+#[test]
+fn default_fields_are_not_selected() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE generic_records (id INTEGER NOT NULL, label TEXT NOT NULL);
+         INSERT INTO generic_records VALUES (8, 'defaulted');",
+    )
+    .unwrap();
+
+    assert_eq!(
+        DefaultedRecord::fetch(&conn).unwrap(),
+        vec![DefaultedRecord {
+            id: 8,
+            skipped: false,
+            label: "defaulted".into(),
+        }]
+    );
+}
+
+#[test]
+fn an_all_default_mapping_still_produces_one_value_per_row() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE generic_records (id INTEGER NOT NULL);
+         INSERT INTO generic_records VALUES (1), (2);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        AllDefault::<String>::fetch(&conn).unwrap(),
+        vec![AllDefault(PhantomData), AllDefault(PhantomData)]
     );
 }
 

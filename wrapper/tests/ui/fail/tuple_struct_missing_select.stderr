@@ -1,4 +1,4 @@
-error: tuple struct fields require #[rusqlite(select = "...")]
+error: tuple struct fields require #[rusqlite(select = "...")] or #[rusqlite(default)]
  --> tests/ui/fail/tuple_struct_missing_select.rs:4:47
   |
 4 | struct Record(#[rusqlite(select = "id")] i64, String);

@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `NotDefault: Default` is not satisfied
+ --> tests/ui/fail/missing_default.rs:9:14
+  |
+9 |     skipped: NotDefault,
+  |              ^^^^^^^^^^ the trait `Default` is not implemented for `NotDefault`
+  |
+help: consider annotating `NotDefault` with `#[derive(Default)]`
+  |
+3 + #[derive(Default)]
+4 | struct NotDefault;
+  |
