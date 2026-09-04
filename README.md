@@ -156,7 +156,7 @@ For dynamic values, use rusqlite directly with placeholders and bound parameters
 
 ## Current limitations
 
-- Structs must have at least one field; unit structs are not supported.
+- Fieldless and unit structs select a constant and produce one value per matching source row.
 - Every non-default tuple struct field must specify `#[rusqlite(select = "...")]`.
 - Fetches return all matching rows as a `Vec`; pagination and streaming are not generated.
 - SQL identifiers and fragments are not validated or quoted by the macro.

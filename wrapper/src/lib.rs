@@ -36,8 +36,9 @@
 //! and initialize it with `Default::default()`. Tuple structs are supported when
 //! every non-default field has an explicit `select` expression. Generic structs
 //! are supported, including their existing bounds. This supports qualified
-//! columns, expressions, and joins. See the [`RusqliteFetch`] derive for details
-//! and limitations.
+//! columns, expressions, and joins. Fieldless and unit structs select a constant
+//! and produce one value per matching source row. See the [`RusqliteFetch`]
+//! derive for details and limitations.
 //!
 //! # Filtering safely
 //!

@@ -67,6 +67,10 @@ struct DefaultedRecord {
 #[rusqlite(from = "generic_records")]
 struct AllDefault<T>(#[rusqlite(default)] PhantomData<T>);
 
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "unit_records")]
+struct UnitRecord;
+
 fn records_connection() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -261,6 +265,21 @@ fn an_all_default_mapping_still_produces_one_value_per_row() {
     assert_eq!(
         AllDefault::<String>::fetch(&conn).unwrap(),
         vec![AllDefault(PhantomData), AllDefault(PhantomData)]
+    );
+}
+
+#[test]
+fn unit_structs_produce_one_value_per_row() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE unit_records (id INTEGER NOT NULL);
+         INSERT INTO unit_records VALUES (1), (2);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        UnitRecord::fetch(&conn).unwrap(),
+        vec![UnitRecord, UnitRecord]
     );
 }
 

@@ -35,10 +35,8 @@ use attribute_derive::FromAttr;
 /// It provides no escaping or parameter binding, so the argument must never
 /// contain untrusted input.
 ///
-/// # Limitations
-///
-/// The macro supports structs with one or more fields. Unit structs are not
-/// supported.
+/// Fieldless and unit structs are supported. They select a constant so that one
+/// value is still constructed per matching source row.
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -81,13 +79,6 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
     let (columns, row_value) = match data.fields {
         syn::Fields::Named(fields) => {
-            if fields.named.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    fields,
-                    "structs must have at least one field",
-                ));
-            }
-
             let mut columns = vec![];
             let mut values = vec![];
 
@@ -120,13 +111,6 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             (columns, quote::quote! { #name { #(#values)* } })
         }
         syn::Fields::Unnamed(fields) => {
-            if fields.unnamed.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    fields,
-                    "structs must have at least one field",
-                ));
-            }
-
             let mut columns = vec![];
             let mut values = vec![];
 
@@ -157,12 +141,7 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
             (columns, quote::quote! { #name(#(#values)*) })
         }
-        syn::Fields::Unit => {
-            return Err(syn::Error::new_spanned(
-                name,
-                "unit structs are not supported for now",
-            ));
-        }
+        syn::Fields::Unit => (vec![], quote::quote! { #name }),
     };
 
     // SQLite still needs a result expression when every field is defaulted.
