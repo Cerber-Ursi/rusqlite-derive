@@ -27,5 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
+      # Compiler diagnostics vary between the MSRV and stable. Overwrite mode
+      # still requires compile-fail cases to fail, but does not compare snapshots.
       - run: cargo test --workspace --all-targets
+        env:
+          TRYBUILD: overwrite
       - run: cargo test --workspace --doc
