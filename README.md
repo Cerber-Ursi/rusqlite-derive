@@ -74,7 +74,20 @@ Without attributes, the Rust struct name is used as the `FROM` fragment and each
 - `#[rusqlite(from = "...")]` on the struct sets the complete SQL `FROM` fragment.
 - `#[rusqlite(select = "...")]` on a field sets that field's SQL select expression.
 
-The values are SQL fragments, not quoted identifiers. This makes aliases, expressions, and joins possible:
+Tuple structs are also supported, but every field must have an explicit `select` expression because unnamed fields have no column name to use by default:
+
+```rust
+use rusqlite_derive::RusqliteFetch;
+
+#[derive(RusqliteFetch)]
+#[rusqlite(from = "users")]
+struct User(
+    #[rusqlite(select = "id")] i64,
+    #[rusqlite(select = "name")] String,
+);
+```
+
+The attribute values are SQL fragments, not quoted identifiers. This makes aliases, expressions, and joins possible:
 
 ```rust
 use rusqlite_derive::RusqliteFetch;
@@ -118,7 +131,8 @@ For dynamic values, use rusqlite directly with placeholders and bound parameters
 
 ## Current limitations
 
-- Only non-generic structs with one or more named fields are supported.
+- Only non-generic structs with one or more fields are supported; unit structs are not.
+- Every tuple struct field must specify `#[rusqlite(select = "...")]`.
 - Fetches return all matching rows as a `Vec`; pagination and streaming are not generated.
 - SQL identifiers and fragments are not validated or quoted by the macro.
 - `fetch_with_filter` has no parameter-binding API.

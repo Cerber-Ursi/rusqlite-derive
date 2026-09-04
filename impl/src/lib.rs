@@ -5,7 +5,7 @@
 
 use attribute_derive::FromAttr;
 
-/// Derives read helpers for a struct with named fields.
+/// Derives read helpers for a struct with named or unnamed fields.
 ///
 /// By default, the macro uses the struct name as the SQL `FROM` fragment and
 /// each field name as a select expression. The generated implementation executes
@@ -18,8 +18,9 @@ use attribute_derive::FromAttr;
 ///
 /// Use `#[rusqlite(from = "...")]` on the struct to override the complete
 /// `FROM` fragment. Use `#[rusqlite(select = "...")]` on a field to override
-/// its select expression. These values are inserted as SQL, allowing qualified
-/// columns, expressions, aliases, and joins.
+/// its select expression. Every field of a tuple struct must specify `select`
+/// because it has no field name to use as a default. These values are inserted
+/// as SQL, allowing qualified columns, expressions, aliases, and joins.
 ///
 /// Selected values are decoded by field declaration order with
 /// `rusqlite::Row::get`.
@@ -32,8 +33,8 @@ use attribute_derive::FromAttr;
 ///
 /// # Limitations
 ///
-/// The macro currently supports non-generic structs with one or more named
-/// fields only.
+/// The macro currently supports non-generic structs with one or more fields.
+/// Unit structs are not supported.
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -72,43 +73,70 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         ));
     };
 
-    let named_fields = match data.fields {
-        syn::Fields::Named(fields) => fields,
-        other => {
-            return Err(syn::Error::new_spanned(
-                other,
-                "only structs with named fields are supported for now",
-            ));
-        }
-    };
-
-    if named_fields.named.is_empty() {
-        return Err(syn::Error::new_spanned(
-            named_fields,
-            "structs must have at least one field",
-        ));
-    }
-
     let name = input.ident;
 
     let table_attr = RusqliteTable::from_attributes(&input.attrs)?;
     let table_name = table_attr.from.unwrap_or_else(|| name.to_string());
 
-    let mut columns = vec![];
-    let mut fields = vec![];
+    let (columns, row_value) = match data.fields {
+        syn::Fields::Named(fields) => {
+            if fields.named.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    fields,
+                    "structs must have at least one field",
+                ));
+            }
 
-    for (index, field) in named_fields.named.into_iter().enumerate() {
-        let name = field
-            .ident
-            .as_ref()
-            .expect("fields were checked to be named");
+            let mut columns = vec![];
+            let mut values = vec![];
 
-        let column_attr = RusqliteColumn::from_attributes(field.attrs)?;
-        let column = column_attr.select.unwrap_or_else(|| name.to_string());
+            for (index, field) in fields.named.into_iter().enumerate() {
+                let field_name = field
+                    .ident
+                    .as_ref()
+                    .expect("fields were checked to be named");
+                let column_attr = RusqliteColumn::from_attributes(&field.attrs)?;
+                let column = column_attr.select.unwrap_or_else(|| field_name.to_string());
 
-        columns.push(column);
-        fields.push(quote::quote! { #name: row.get(#index)?, });
-    }
+                columns.push(column);
+                values.push(quote::quote! { #field_name: row.get(#index)?, });
+            }
+
+            (columns, quote::quote! { #name { #(#values)* } })
+        }
+        syn::Fields::Unnamed(fields) => {
+            if fields.unnamed.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    fields,
+                    "structs must have at least one field",
+                ));
+            }
+
+            let mut columns = vec![];
+            let mut values = vec![];
+
+            for (index, field) in fields.unnamed.into_iter().enumerate() {
+                let column_attr = RusqliteColumn::from_attributes(&field.attrs)?;
+                let column = column_attr.select.ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        &field,
+                        "tuple struct fields require #[rusqlite(select = \"...\")]",
+                    )
+                })?;
+
+                columns.push(column);
+                values.push(quote::quote! { row.get(#index)?, });
+            }
+
+            (columns, quote::quote! { #name(#(#values)*) })
+        }
+        syn::Fields::Unit => {
+            return Err(syn::Error::new_spanned(
+                name,
+                "unit structs are not supported for now",
+            ));
+        }
+    };
 
     let query_simple = format!("SELECT {} FROM {};", columns.join(", "), table_name);
     let query_with_where = format!(
@@ -123,9 +151,7 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 conn
                     .prepare(#query_simple)?
                     .query_map([], |row| {
-                        Ok(#name {
-                            #(#fields)*
-                        })
+                        Ok(#row_value)
                     })?
                     .collect()
             }
@@ -133,9 +159,7 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 conn
                     .prepare(&format!(#query_with_where, filter))?
                     .query_map([], |row| {
-                        Ok(#name {
-                            #(#fields)*
-                        })
+                        Ok(#row_value)
                     })?
                     .collect()
             }

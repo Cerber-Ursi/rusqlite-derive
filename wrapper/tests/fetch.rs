@@ -15,6 +15,13 @@ struct RenamedRecord {
 }
 
 #[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "tuple_records")]
+struct TupleRecord(
+    #[rusqlite(select = "record_id")] i64,
+    #[rusqlite(select = "label || '!'")] String,
+);
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
 #[rusqlite(from = "users AS u JOIN teams AS t ON t.id = u.team_id")]
 struct UserWithTeam {
     #[rusqlite(select = "u.id")]
@@ -122,6 +129,21 @@ fn custom_source_is_used() {
         vec![RenamedRecord {
             value: "mapped".into()
         }]
+    );
+}
+
+#[test]
+fn tuple_struct_fields_use_explicit_select_expressions() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE tuple_records (record_id INTEGER NOT NULL, label TEXT NOT NULL);
+         INSERT INTO tuple_records VALUES (7, 'tuple');",
+    )
+    .unwrap();
+
+    assert_eq!(
+        TupleRecord::fetch(&conn).unwrap(),
+        vec![TupleRecord(7, "tuple!".into())]
     );
 }
 

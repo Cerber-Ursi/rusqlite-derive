@@ -32,8 +32,9 @@
 //!
 //! Put `#[rusqlite(from = "...")]` on a struct to customize its complete SQL
 //! `FROM` fragment. Put `#[rusqlite(select = "...")]` on a field to customize
-//! its select expression. This supports qualified columns, expressions, and
-//! joins. See the [`RusqliteFetch`] derive for details and limitations.
+//! its select expression. Tuple structs are supported when every field has an
+//! explicit `select` expression. This supports qualified columns, expressions,
+//! and joins. See the [`RusqliteFetch`] derive for details and limitations.
 //!
 //! # Filtering safely
 //!
