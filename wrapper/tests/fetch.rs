@@ -118,10 +118,11 @@ fn fetch_uses_default_source_and_field_mappings() {
 }
 
 #[test]
-fn fetch_with_filter_applies_program_controlled_sql() {
+fn fetch_with_filter_accepts_a_static_filter_and_ordering() {
     let conn = records_connection();
 
-    let records = DefaultRecord::fetch_with_filter(&conn, "enabled = 1 ORDER BY id DESC").unwrap();
+    let records =
+        DefaultRecord::fetch_with_filter(&conn, "enabled = 1 ORDER BY id DESC", []).unwrap();
 
     assert_eq!(
         records,
@@ -138,6 +139,66 @@ fn fetch_with_filter_applies_program_controlled_sql() {
             },
         ]
     );
+}
+
+#[test]
+fn fetch_with_filter_binds_positional_values_and_a_limit() {
+    let conn = records_connection();
+
+    let records = DefaultRecord::fetch_with_filter(
+        &conn,
+        "enabled = ?1 AND id >= ?2 ORDER BY id DESC LIMIT ?3",
+        rusqlite::params![true, 1_i64, 1_i64],
+    )
+    .unwrap();
+
+    assert_eq!(records[0].id, 3);
+    assert_eq!(records.len(), 1);
+}
+
+#[test]
+fn fetch_with_filter_binds_named_values() {
+    let conn = records_connection();
+
+    let records = DefaultRecord::fetch_with_filter(
+        &conn,
+        "enabled = :enabled ORDER BY id",
+        rusqlite::named_params! { ":enabled": true },
+    )
+    .unwrap();
+
+    assert_eq!(
+        records.iter().map(|record| record.id).collect::<Vec<_>>(),
+        [1, 3]
+    );
+}
+
+#[test]
+fn fetch_with_filter_treats_quotes_as_part_of_a_bound_value() {
+    let conn = records_connection();
+    conn.execute(
+        "INSERT INTO DefaultRecord VALUES (?1, ?2, ?3)",
+        rusqlite::params![4_i64, "O'Reilly", true],
+    )
+    .unwrap();
+
+    let records =
+        DefaultRecord::fetch_with_filter(&conn, "label = ?1", rusqlite::params!["O'Reilly"])
+            .unwrap();
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, 4);
+}
+
+#[test]
+fn fetch_with_filter_returns_parameter_count_errors() {
+    let conn = records_connection();
+
+    let error = DefaultRecord::fetch_with_filter(&conn, "id = ?1", []).unwrap_err();
+    assert!(matches!(
+        error,
+        rusqlite::Error::InvalidParameterCount(0, 1)
+    ));
 }
 
 #[test]
@@ -296,7 +357,7 @@ fn fetch_with_filter_returns_an_empty_vector_when_no_rows_match() {
     let conn = records_connection();
 
     assert!(
-        DefaultRecord::fetch_with_filter(&conn, "id > 100")
+        DefaultRecord::fetch_with_filter(&conn, "id > ?1", rusqlite::params![100_i64])
             .unwrap()
             .is_empty()
     );
@@ -313,6 +374,29 @@ fn row_decode_errors_are_returned() {
 
     let error = ExpectedInteger::fetch(&conn).unwrap_err();
     assert!(matches!(error, rusqlite::Error::InvalidColumnType(..)));
+
+    let error = ExpectedInteger::fetch_with_filter(
+        &conn,
+        "value = ?1",
+        rusqlite::params!["not an integer"],
+    )
+    .unwrap_err();
+    assert!(matches!(error, rusqlite::Error::InvalidColumnType(..)));
+}
+
+#[test]
+fn parametrized_filters_reuse_the_unit_struct_mapper() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE unit_records (id INTEGER NOT NULL);
+         INSERT INTO unit_records VALUES (1), (2);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        UnitRecord::fetch_with_filter(&conn, "id = ?1", rusqlite::params![2_i64]).unwrap(),
+        vec![UnitRecord]
+    );
 }
 
 #[test]
@@ -320,5 +404,5 @@ fn sql_errors_are_returned() {
     let conn = records_connection();
 
     assert!(MissingTable::fetch(&conn).is_err());
-    assert!(DefaultRecord::fetch_with_filter(&conn, "not valid SQL").is_err());
+    assert!(DefaultRecord::fetch_with_filter(&conn, "not valid SQL", []).is_err());
 }

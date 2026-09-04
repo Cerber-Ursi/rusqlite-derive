@@ -40,9 +40,9 @@ use attribute_derive::FromAttr;
 ///
 /// # Security
 ///
-/// `fetch_with_filter` inserts its filter argument verbatim. It does not escape
-/// values or bind parameters. Never include untrusted input in the filter; use
-/// rusqlite directly when dynamic values are needed.
+/// `fetch_with_filter` inserts its filter argument verbatim. Bind dynamic
+/// values with placeholders and its `params` argument; never include untrusted
+/// SQL structure in the filter.
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -171,10 +171,14 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     })?
                     .collect()
             }
-            fn fetch_with_filter(conn: &rusqlite::Connection, filter: &str) -> rusqlite::Result<Vec<Self>> {
+            fn fetch_with_filter<P: ::rusqlite::Params>(
+                conn: &::rusqlite::Connection,
+                filter: &str,
+                params: P,
+            ) -> ::rusqlite::Result<Vec<Self>> {
                 conn
                     .prepare(&format!(#query_with_where, filter))?
-                    .query_map([], |row| {
+                    .query_map(params, |row| {
                         Ok(#row_value)
                     })?
                     .collect()

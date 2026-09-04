@@ -25,7 +25,11 @@
 //! )?;
 //!
 //! let users = User::fetch(&conn)?;
-//! let ada = User::fetch_with_filter(&conn, "name = 'Ada'")?;
+//! let ada = User::fetch_with_filter(
+//!     &conn,
+//!     "name = ?1",
+//!     rusqlite::params!["Ada"],
+//! )?;
 //!
 //! assert_eq!(users.len(), 2);
 //! assert_eq!(ada, vec![User { id: 1, name: "Ada".into() }]);
@@ -47,9 +51,9 @@
 //!
 //! # Filtering safely
 //!
-//! [`RusqliteFetch::fetch_with_filter`] inserts its argument verbatim. Never
-//! include untrusted input in the filter. Use rusqlite placeholders and bound
-//! parameters for dynamic values.
+//! [`RusqliteFetch::fetch_with_filter`] inserts its filter argument verbatim.
+//! Bind dynamic values with placeholders and its parameter argument. Never
+//! include untrusted SQL structure in the filter.
 
 pub use rusqlite_derive_impl::RusqliteFetch;
 
@@ -61,8 +65,8 @@ pub use rusqlite_derive_impl::RusqliteFetch;
 /// marked `#[rusqlite(default)]` is omitted from the query and initialized with
 /// [`Default::default`].
 ///
-/// Use rusqlite directly for writes, bound parameters, custom result handling,
-/// or incremental row processing.
+/// Use rusqlite directly for writes, custom result handling, or incremental
+/// row processing.
 pub trait RusqliteFetch: Sized {
     /// Fetches every row from the derive's configured `FROM` fragment.
     ///
@@ -76,8 +80,18 @@ pub trait RusqliteFetch: Sized {
     ///
     /// # Security
     ///
-    /// The generated implementation inserts `filter` verbatim; it neither
-    /// escapes values nor binds parameters. Only pass fragments controlled
-    /// entirely by the application. Use rusqlite directly for dynamic values.
-    fn fetch_with_filter(conn: &rusqlite::Connection, filter: &str) -> rusqlite::Result<Vec<Self>>;
+    /// The generated implementation inserts `filter` verbatim. Bind all
+    /// dynamic values with placeholders and `params`; only the SQL structure
+    /// of the filter must be controlled entirely by the application. Positional
+    /// and named parameters are both supported through rusqlite's
+    /// [`params!`](macro@rusqlite::params) and
+    /// [`named_params!`](macro@rusqlite::named_params) macros.
+    ///
+    /// Parameters are bound to the complete generated statement, including any
+    /// placeholders in configured `select` or `from` fragments.
+    fn fetch_with_filter<P: rusqlite::Params>(
+        conn: &rusqlite::Connection,
+        filter: &str,
+        params: P,
+    ) -> rusqlite::Result<Vec<Self>>;
 }

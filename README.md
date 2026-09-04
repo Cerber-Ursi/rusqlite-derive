@@ -57,7 +57,7 @@ fn main() -> rusqlite::Result<()> {
     let users = User::fetch(&conn)?;
     assert_eq!(users.len(), 2);
 
-    let active = User::fetch_with_filter(&conn, "active = 1")?;
+    let active = User::fetch_with_filter(&conn, "active = ?1", rusqlite::params![true])?;
     assert_eq!(active, vec![User {
         id: 1,
         name: "Ada".to_owned(),
@@ -160,27 +160,39 @@ produces one value.
 
 ## Filtering safely
 
-> **Warning:** `fetch_with_filter` inserts its argument into the SQL statement
-> verbatim. It does not escape values or bind parameters.
+> **Warning:** `fetch_with_filter` inserts its filter argument into the SQL
+> statement verbatim. Parameter binding protects values, not SQL structure.
 
-Only pass SQL fragments that are entirely controlled by the application:
+Bind dynamic values with rusqlite placeholders:
+
+```rust
+let minimum_id = 10;
+let users = User::fetch_with_filter(
+    &conn,
+    "id > ?1 ORDER BY id",
+    rusqlite::params![minimum_id],
+)?;
+```
+
+Named parameters are supported through rusqlite as well:
 
 ```rust
 let users = User::fetch_with_filter(
     &conn,
-    "id > 10 ORDER BY id",
+    "id > :minimum_id ORDER BY id",
+    rusqlite::named_params! { ":minimum_id": minimum_id },
 )?;
 ```
 
-Never build this argument from untrusted or user-provided data. For dynamic
-values, write the query with rusqlite placeholders and bind the parameters
-directly.
+Never construct the filter's SQL structure - such as column names, operators, or
+ordering expressions - from untrusted input. Parameters are bound to the complete
+generated statement, so placeholders in configured `select` or `from` fragments
+also consume parameters.
 
 ## Limitations
 
 - Both helpers collect all matching rows into a `Vec`; they do not provide
   streaming or pagination.
 - SQL identifiers and fragments are neither validated nor quoted.
-- `fetch_with_filter` does not support bound parameters.
 - The derive only generates reads; writes and migrations remain the
   application's responsibility.
