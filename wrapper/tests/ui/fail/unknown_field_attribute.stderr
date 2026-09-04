@@ -1,0 +1,5 @@
+error: expected supported field `select`
+ --> tests/ui/fail/unknown_field_attribute.rs:5:16
+  |
+5 |     #[rusqlite(column = "id")]
+  |                ^^^^^^

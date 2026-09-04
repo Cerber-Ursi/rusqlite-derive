@@ -1,0 +1,5 @@
+error: expected supported field `from`
+ --> tests/ui/fail/unknown_struct_attribute.rs:4:12
+  |
+4 | #[rusqlite(table = "records")]
+  |            ^^^^^

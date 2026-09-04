@@ -9,4 +9,5 @@ rusqlite = { version = "0.38.0", default-features = false }
 rusqlite-derive-impl = { version = "=0.1.0", path = "../impl" }
 
 [dev-dependencies]
-rusqlite = { version = "0.38.0", features = ["bundled"] }
+rusqlite = { version = "0.38.0", default-features = false, features = ["bundled"] }
+trybuild = "1"

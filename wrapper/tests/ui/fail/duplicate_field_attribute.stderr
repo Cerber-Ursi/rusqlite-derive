@@ -1,0 +1,11 @@
+error: `select` is specified multiple times
+ --> tests/ui/fail/duplicate_field_attribute.rs:5:25
+  |
+5 |     #[rusqlite(select = "first", select = "second")]
+  |                         ^^^^^^^
+
+error: `select` is specified multiple times
+ --> tests/ui/fail/duplicate_field_attribute.rs:5:43
+  |
+5 |     #[rusqlite(select = "first", select = "second")]
+  |                                           ^^^^^^^^

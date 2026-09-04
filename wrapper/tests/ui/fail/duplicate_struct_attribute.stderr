@@ -1,0 +1,11 @@
+error: `from` is specified multiple times
+ --> tests/ui/fail/duplicate_struct_attribute.rs:4:19
+  |
+4 | #[rusqlite(from = "first", from = "second")]
+  |                   ^^^^^^^
+
+error: `from` is specified multiple times
+ --> tests/ui/fail/duplicate_struct_attribute.rs:4:35
+  |
+4 | #[rusqlite(from = "first", from = "second")]
+  |                                   ^^^^^^^^

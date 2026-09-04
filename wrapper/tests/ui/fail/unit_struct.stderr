@@ -1,0 +1,7 @@
+error: only structs with named fields are supported for now
+ --> tests/ui/fail/unit_struct.rs:3:10
+  |
+3 | #[derive(RusqliteFetch)]
+  |          ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `RusqliteFetch` (in Nightly builds, run with -Z macro-backtrace for more info)

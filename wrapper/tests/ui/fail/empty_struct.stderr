@@ -1,0 +1,5 @@
+error: structs must have at least one field
+ --> tests/ui/fail/empty_struct.rs:4:15
+  |
+4 | struct Record {}
+  |               ^^

@@ -1,0 +1,5 @@
+error: only structs are supported for now
+ --> tests/ui/fail/union.rs:4:7
+  |
+4 | union Record {
+  |       ^^^^^^

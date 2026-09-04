@@ -58,12 +58,36 @@ struct RusqliteColumn {
 }
 
 fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            input.generics,
+            "generic structs are not supported for now",
+        ));
+    }
+
     let syn::Data::Struct(data) = input.data else {
         return Err(syn::Error::new_spanned(
             input.ident,
             "only structs are supported for now",
         ));
     };
+
+    let named_fields = match data.fields {
+        syn::Fields::Named(fields) => fields,
+        other => {
+            return Err(syn::Error::new_spanned(
+                other,
+                "only structs with named fields are supported for now",
+            ));
+        }
+    };
+
+    if named_fields.named.is_empty() {
+        return Err(syn::Error::new_spanned(
+            named_fields,
+            "structs must have at least one field",
+        ));
+    }
 
     let name = input.ident;
 
@@ -73,13 +97,11 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let mut columns = vec![];
     let mut fields = vec![];
 
-    for (index, field) in data.fields.into_iter().enumerate() {
-        let name = field.ident.as_ref().ok_or_else(|| {
-            syn::Error::new_spanned(
-                &field,
-                "only structs with named fields are supported for now",
-            )
-        })?;
+    for (index, field) in named_fields.named.into_iter().enumerate() {
+        let name = field
+            .ident
+            .as_ref()
+            .expect("fields were checked to be named");
 
         let column_attr = RusqliteColumn::from_attributes(field.attrs)?;
         let column = column_attr.select.unwrap_or_else(|| name.to_string());
