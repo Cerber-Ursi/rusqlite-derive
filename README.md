@@ -1,12 +1,20 @@
 # rusqlite-derive
 
-`rusqlite-derive` is a small derive macro for mapping SQLite query rows to Rust structs. It generates two read helpers on top of [`rusqlite`](https://crates.io/crates/rusqlite): one that fetches every row and one that appends a caller-supplied predicate after `WHERE`.
+`rusqlite-derive` maps SQLite rows to Rust structs. Deriving `RusqliteFetch`
+adds two helpers:
 
-This crate is intentionally ORM-*ish*, rather than a full ORM. It generates `SELECT` statements and decodes rows; schema management, relationships, inserts, updates, deletes, and parameterized query construction remain the application's responsibility.
+- `fetch`, which returns every row from a configured SQL source;
+- `fetch_with_filter`, which adds a caller-provided expression after `WHERE`.
+
+The crate is a small convenience layer over
+[`rusqlite`](https://crates.io/crates/rusqlite), not an ORM. It does not manage
+schemas or generate inserts, updates, deletes, relationships, or arbitrary
+queries.
 
 ## Installation
 
-Add both `rusqlite-derive` and `rusqlite` to your application. The generated implementation refers to `rusqlite` directly.
+Add `rusqlite-derive` and `rusqlite` to your application. The generated code
+refers to `rusqlite` directly.
 
 ```toml
 [dependencies]
@@ -14,9 +22,11 @@ rusqlite = "0.38"
 rusqlite-derive = "0.1"
 ```
 
-The crate uses rusqlite without default features. If a system SQLite library is not available, enable rusqlite's `bundled` feature:
+This crate does not enable any rusqlite features. If your system does not
+provide SQLite, enable rusqlite's `bundled` feature:
 
 ```toml
+[dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
 rusqlite-derive = "0.1"
 ```
@@ -47,8 +57,8 @@ fn main() -> rusqlite::Result<()> {
     let users = User::fetch(&conn)?;
     assert_eq!(users.len(), 2);
 
-    let active_users = User::fetch_with_filter(&conn, "active = 1")?;
-    assert_eq!(active_users, vec![User {
+    let active = User::fetch_with_filter(&conn, "active = 1")?;
+    assert_eq!(active, vec![User {
         id: 1,
         name: "Ada".to_owned(),
         active: true,
@@ -58,25 +68,58 @@ fn main() -> rusqlite::Result<()> {
 }
 ```
 
-The derive above generates queries equivalent to:
+This derive generates queries equivalent to:
 
 ```sql
 SELECT id, name, active FROM users;
 SELECT id, name, active FROM users WHERE <filter>;
 ```
 
-Each selected value is decoded with `rusqlite::Row::get`, in struct field declaration order. Consequently, every selected field type must implement rusqlite's `FromSql`.
+Selected values are decoded with `rusqlite::Row::get` in field declaration
+order. Each selected field type must therefore implement `FromSql`.
 
-## Mapping SQL expressions
+## Configuring the mapping
 
-Without attributes, the Rust struct name is used as the `FROM` fragment and each Rust field name is used as its select expression. Attributes can override either value:
+By default, the struct name becomes the SQL `FROM` source and each named field
+becomes a select expression. The following attributes override that behavior:
 
-- `#[rusqlite(from = "...")]` on the struct sets the complete SQL `FROM` fragment.
-- `#[rusqlite(select = "...")]` on a field sets that field's SQL select expression.
-- `#[rusqlite(default)]` omits a field from the query and initializes it with
-  `Default::default()`. It cannot be combined with `select`.
+| Attribute                     | Location | Effect                                                                       |
+|-------------------------------|----------|------------------------------------------------------------------------------|
+| `#[rusqlite(from = "...")]`   | Struct   | Replaces the complete `FROM` fragment.                                       |
+| `#[rusqlite(select = "...")]` | Field    | Replaces the field's select expression.                                      |
+| `#[rusqlite(default)]`        | Field    | Omits the field from the query and initializes it with `Default::default()`. |
 
-Tuple structs are also supported, but every non-default field must have an explicit `select` expression because unnamed fields have no column name to use by default:
+`default` and `select` cannot be used on the same field.
+
+Attribute values are unquoted SQL fragments. This permits qualified columns,
+expressions, aliases, and joins:
+
+```rust
+use rusqlite_derive::RusqliteFetch;
+
+#[derive(RusqliteFetch)]
+#[rusqlite(from = "users AS u JOIN teams AS t ON t.id = u.team_id")]
+struct UserWithTeam {
+    #[rusqlite(select = "u.id")]
+    user_id: i64,
+    #[rusqlite(select = "upper(u.name)")]
+    name: String,
+    #[rusqlite(select = "t.name")]
+    team_name: String,
+}
+```
+
+The generated query is:
+
+```sql
+SELECT u.id, upper(u.name), t.name
+FROM users AS u JOIN teams AS t ON t.id = u.team_id;
+```
+
+### Tuple structs
+
+Tuple structs are supported. Because unnamed fields have no default column
+name, every field must use either `select` or `default`:
 
 ```rust
 use rusqlite_derive::RusqliteFetch;
@@ -89,9 +132,9 @@ struct User(
 );
 ```
 
-Default fields are useful for marker values in generic structs. Generic parameters,
-lifetimes, const parameters, and existing `where` clauses are preserved by the
-generated implementation:
+### Defaulted and generic fields
+
+A defaulted field is not included in the `SELECT` list:
 
 ```rust
 use std::marker::PhantomData;
@@ -107,58 +150,37 @@ struct User<T, Marker> {
 }
 ```
 
-The generated implementation adds `FromSql` bounds for generic-dependent
-selected field types and `Default` bounds for generic-dependent default fields.
-Missing implementations on concrete field types are reported at that field's
-type rather than at the whole derive input.
+Generic parameters and existing `where` clauses are preserved. The derive adds
+`FromSql` bounds for selected field types that depend on generic parameters and
+`Default` bounds for defaulted field types that depend on them.
 
-The attribute values are SQL fragments, not quoted identifiers. This makes aliases, expressions, and joins possible:
+Unit structs and structs whose fields are all defaulted are also supported. The
+generated query selects a constant so that each matching source row still
+produces one value.
 
-```rust
-use rusqlite_derive::RusqliteFetch;
+## Filtering safely
 
-#[derive(RusqliteFetch)]
-#[rusqlite(from = "users AS u JOIN teams AS t ON t.id = u.team_id")]
-struct UserWithTeam {
-    #[rusqlite(select = "u.id")]
-    user_id: i64,
-    #[rusqlite(select = "u.name")]
-    user_name: String,
-    #[rusqlite(select = "t.name")]
-    team_name: String,
-}
-```
+> **Warning:** `fetch_with_filter` inserts its argument into the SQL statement
+> verbatim. It does not escape values or bind parameters.
 
-This mapping produces:
-
-```sql
-SELECT u.id, u.name, t.name
-FROM users AS u JOIN teams AS t ON t.id = u.team_id;
-```
-
-## Filtering and security
-
-`fetch_with_filter` inserts its `filter` argument verbatim after `WHERE`. It does **not** bind parameters or escape values. Never construct the filter from untrusted or user-provided input:
+Only pass SQL fragments that are entirely controlled by the application:
 
 ```rust
-# use rusqlite_derive::RusqliteFetch;
-# #[derive(RusqliteFetch)]
-# #[rusqlite(from = "users")]
-# struct User { id: i64 }
-# fn example(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-// Appropriate only when the entire fragment is controlled by the program.
-let users = User::fetch_with_filter(conn, "id > 10")?;
-# Ok(())
-# }
+let users = User::fetch_with_filter(
+    &conn,
+    "id > 10 ORDER BY id",
+)?;
 ```
 
-For dynamic values, use rusqlite directly with placeholders and bound parameters.
+Never build this argument from untrusted or user-provided data. For dynamic
+values, write the query with rusqlite placeholders and bind the parameters
+directly.
 
-## Current limitations
+## Limitations
 
-- Fieldless and unit structs select a constant and produce one value per matching source row.
-- Every non-default tuple struct field must specify `#[rusqlite(select = "...")]`.
-- Fetches return all matching rows as a `Vec`; pagination and streaming are not generated.
-- SQL identifiers and fragments are not validated or quoted by the macro.
-- `fetch_with_filter` has no parameter-binding API.
-- The derive only generates reads; it does not generate write operations or migrations.
+- Both helpers collect all matching rows into a `Vec`; they do not provide
+  streaming or pagination.
+- SQL identifiers and fragments are neither validated nor quoted.
+- `fetch_with_filter` does not support bound parameters.
+- The derive only generates reads; writes and migrations remain the
+  application's responsibility.

@@ -5,38 +5,44 @@
 
 use attribute_derive::FromAttr;
 
-/// Derives read helpers for a struct with named or unnamed fields.
+/// Derives SQLite read helpers for a struct.
 ///
-/// By default, the macro uses the struct name as the SQL `FROM` fragment and
-/// each field name as a select expression. The generated implementation executes
-/// statements equivalent to:
+/// By default, the struct name is used as the SQL `FROM` source and each named
+/// field is used as a select expression. The generated queries have this form:
 ///
 /// ```sql
 /// SELECT field_1, field_2 FROM StructName;
 /// SELECT field_1, field_2 FROM StructName WHERE <filter>;
 /// ```
 ///
-/// Use `#[rusqlite(from = "...")]` on the struct to override the complete
-/// `FROM` fragment. Use `#[rusqlite(select = "...")]` on a field to override
-/// its select expression, or `#[rusqlite(default)]` to omit the field from the
-/// query and initialize it with `Default::default()`. Every non-default field
-/// of a tuple struct must specify `select` because it has no field name to use
-/// as a default. SQL values are inserted verbatim, allowing qualified columns,
-/// expressions, aliases, and joins.
+/// # Attributes
 ///
-/// Selected values are decoded by field declaration order with
-/// `rusqlite::Row::get`. Generic structs are supported; the generated impl is
-/// constrained by `FromSql` for selected field types and `Default` for defaulted
-/// field types.
+/// - `#[rusqlite(from = "...")]` on the struct replaces the complete `FROM`
+///   fragment.
+/// - `#[rusqlite(select = "...")]` on a field replaces its select expression.
+/// - `#[rusqlite(default)]` on a field omits it from the query and initializes
+///   it with `Default::default()`. It cannot be combined with `select`.
+///
+/// Attribute values are inserted as unquoted SQL fragments. They can therefore
+/// contain qualified columns, expressions, aliases, and joins.
+///
+/// # Supported structs
+///
+/// Named, tuple, generic, fieldless, and unit structs are supported. Every
+/// non-default tuple field must specify `select`, because an unnamed field has
+/// no default column name. Fieldless structs and structs whose fields are all
+/// defaulted select a constant, preserving one value per matching source row.
+///
+/// Selected values are decoded with `rusqlite::Row::get` in field declaration
+/// order. The generated implementation adds `FromSql` bounds for selected field
+/// types that depend on generic parameters and `Default` bounds for defaulted
+/// field types that depend on them. Existing generic bounds are preserved.
 ///
 /// # Security
 ///
-/// `fetch_with_filter` inserts its filter argument into the statement verbatim.
-/// It provides no escaping or parameter binding, so the argument must never
-/// contain untrusted input.
-///
-/// Fieldless and unit structs are supported. They select a constant so that one
-/// value is still constructed per matching source row.
+/// `fetch_with_filter` inserts its filter argument verbatim. It does not escape
+/// values or bind parameters. Never include untrusted input in the filter; use
+/// rusqlite directly when dynamic values are needed.
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
