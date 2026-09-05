@@ -75,13 +75,15 @@ Selected values are decoded with `rusqlite::Row::get` in field declaration order
 
 By default, the struct name becomes the SQL `FROM` source and each named field becomes a select expression. The following attributes override that behavior:
 
-| Attribute                     | Location | Effect                                                                       |
-|-------------------------------|----------|------------------------------------------------------------------------------|
-| `#[rusqlite(from = "...")]`   | Struct   | Replaces the complete `FROM` fragment.                                       |
-| `#[rusqlite(select = "...")]` | Field    | Replaces the field's select expression.                                      |
-| `#[rusqlite(default)]`        | Field    | Omits the field from the query and initializes it with `Default::default()`. |
+| Attribute                          | Location | Effect                                                                       |
+|------------------------------------|----------|------------------------------------------------------------------------------|
+| `#[rusqlite(table = "...")]`       | Struct   | Supplies a simple table as the read source when `from` is absent.            |
+| `#[rusqlite(from = "...")]`        | Struct   | Replaces the complete `FROM` fragment.                                       |
+| `#[rusqlite(column = "...")]`      | Field    | Supplies a simple field expression when `select` is absent.                  |
+| `#[rusqlite(select = "...")]`      | Field    | Replaces the field's select expression.                                      |
+| `#[rusqlite(read_default)]`        | Field    | Omits the field from the query and initializes it with `Default::default()`. |
 
-`default` and `select` cannot be used on the same field.
+`read_default` and `select` cannot be used on the same field.
 
 Attribute values are unquoted SQL fragments. This permits qualified columns, expressions, aliases, and joins:
 
@@ -109,7 +111,7 @@ FROM users AS u JOIN teams AS t ON t.id = u.team_id;
 
 ### Tuple structs
 
-Tuple structs are supported. Because unnamed fields have no default column name, every field must use either `select` or `default`:
+Tuple structs are supported. Because unnamed fields have no default column name, every field must use `select`, `column`, or `read_default`:
 
 ```rust
 use rusqlite_derive::RusqliteFetch;
@@ -135,7 +137,7 @@ use rusqlite_derive::RusqliteFetch;
 struct User<T, Marker> {
     id: T,
     name: String,
-    #[rusqlite(default)]
+    #[rusqlite(read_default)]
     marker: PhantomData<Marker>,
 }
 ```

@@ -7,7 +7,7 @@ where
     T: Clone,
 {
     value: T,
-    #[rusqlite(default)]
+    #[rusqlite(read_default)]
     marker: PhantomData<(&'a (), [(); N])>,
 }
 

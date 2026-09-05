@@ -1,5 +1,5 @@
-error: supported fields are `select` and `default`
+error: supported fields are `select`, `column` and `read_default`
  --> tests/ui/fail/unknown_field_attribute.rs:5:16
   |
-5 |     #[rusqlite(column = "id")]
+5 |     #[rusqlite(rename = "id")]
   |                ^^^^^^

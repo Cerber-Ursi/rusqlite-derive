@@ -1,11 +1,11 @@
-error: `default` conflicts with mutually exclusive `select`
+error: `read_default` conflicts with mutually exclusive `select`
  --> tests/ui/fail/conflicting_field_attributes.rs:5:34
   |
-5 |     #[rusqlite(select = "value", default)]
-  |                                  ^^^^^^^
+5 |     #[rusqlite(select = "value", read_default)]
+  |                                  ^^^^^^^^^^^^
 
-error: `select` conflicts with mutually exclusive `default`
+error: `select` conflicts with mutually exclusive `read_default`
  --> tests/ui/fail/conflicting_field_attributes.rs:5:16
   |
-5 |     #[rusqlite(select = "value", default)]
+5 |     #[rusqlite(select = "value", read_default)]
   |                ^^^^^^
