@@ -1,0 +1,6 @@
+error: a field skipped for both insert and update should use #[rusqlite(skip_write)]
+ --> tests/ui/fail/write_both_operation_skips.rs:8:5
+  |
+8 | /     #[rusqlite(skip_insert, skip_update)]
+9 | |     value: String,
+  | |_________________^

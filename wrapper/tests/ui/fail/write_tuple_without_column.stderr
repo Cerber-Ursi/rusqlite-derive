@@ -1,0 +1,5 @@
+error: tuple field has no writable column; add #[rusqlite(column = "...")] or #[rusqlite(skip_write)]
+ --> tests/ui/fail/write_tuple_without_column.rs:5:52
+  |
+5 | struct Record(#[rusqlite(column = "id", key)] i64, String);
+  |                                                    ^^^^^^

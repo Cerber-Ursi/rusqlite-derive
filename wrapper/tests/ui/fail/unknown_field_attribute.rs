@@ -2,7 +2,7 @@ use rusqlite_derive::RusqliteFetch;
 
 #[derive(RusqliteFetch)]
 struct Record {
-    #[rusqlite(column = "id")]
+    #[rusqlite(rename = "id")]
     id: i64,
 }
 

@@ -58,14 +58,14 @@ struct GenericRecord<T> {
 #[rusqlite(from = "generic_records")]
 struct DefaultedRecord {
     id: i64,
-    #[rusqlite(default)]
+    #[rusqlite(read_default)]
     skipped: bool,
     label: String,
 }
 
 #[derive(Debug, PartialEq, RusqliteFetch)]
 #[rusqlite(from = "generic_records")]
-struct AllDefault<T>(#[rusqlite(default)] PhantomData<T>);
+struct AllDefault<T>(#[rusqlite(read_default)] PhantomData<T>);
 
 #[derive(Debug, PartialEq, RusqliteFetch)]
 #[rusqlite(from = "unit_records")]

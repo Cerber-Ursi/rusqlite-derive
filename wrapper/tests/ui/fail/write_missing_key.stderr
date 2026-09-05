@@ -1,0 +1,5 @@
+error: RusqliteWrite requires at least one #[rusqlite(key)] field
+ --> tests/ui/fail/write_missing_key.rs:5:8
+  |
+5 | struct Record {
+  |        ^^^^^^

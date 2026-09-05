@@ -1,0 +1,5 @@
+error: RusqliteWrite requires #[rusqlite(table = "...")]
+ --> tests/ui/fail/write_missing_table.rs:4:8
+  |
+4 | struct Record {
+  |        ^^^^^^

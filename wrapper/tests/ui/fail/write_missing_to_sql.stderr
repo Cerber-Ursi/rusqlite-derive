@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `NotSql: ToSql` is not satisfied
+  --> tests/ui/fail/write_missing_to_sql.rs:10:5
+   |
+10 |     value: NotSql,
+   |     ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ToSql` is not implemented for `NotSql`
+  --> tests/ui/fail/write_missing_to_sql.rs:3:1
+   |
+ 3 | struct NotSql;
+   | ^^^^^^^^^^^^^
+   = help: the following other types implement trait `ToSql`:
+             &T
+             Arc<T>
+             Box<T>
+             Cow<'_, T>
+             NonZero<i16>
+             NonZero<i32>
+             NonZero<i64>
+             NonZero<i8>
+           and $N others
+   = note: required for the cast from `&NotSql` to `&dyn ToSql`

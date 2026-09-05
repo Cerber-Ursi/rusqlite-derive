@@ -1,0 +1,6 @@
+error: key fields are already excluded from update assignments; remove #[rusqlite(skip_update)]
+ --> tests/ui/fail/write_key_skip_update.rs:6:5
+  |
+6 | /     #[rusqlite(key, skip_update)]
+7 | |     id: i64,
+  | |___________^

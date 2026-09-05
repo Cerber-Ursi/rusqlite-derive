@@ -1,0 +1,11 @@
+error: `skip_insert` conflicts with mutually exclusive `skip_write`
+ --> tests/ui/fail/write_skip_write_with_skip_insert.rs:8:28
+  |
+8 |     #[rusqlite(skip_write, skip_insert)]
+  |                            ^^^^^^^^^^^
+
+error: `skip_write` conflicts with mutually exclusive `skip_insert`
+ --> tests/ui/fail/write_skip_write_with_skip_insert.rs:8:16
+  |
+8 |     #[rusqlite(skip_write, skip_insert)]
+  |                ^^^^^^^^^^

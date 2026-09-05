@@ -5,7 +5,7 @@ struct NotDefault;
 #[derive(RusqliteFetch)]
 struct Record<T> {
     value: i64,
-    #[rusqlite(default)]
+    #[rusqlite(read_default)]
     skipped: T,
 }
 
