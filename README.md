@@ -1,20 +1,15 @@
 # rusqlite-derive
 
-`rusqlite-derive` maps SQLite rows to Rust structs. Deriving `RusqliteFetch`
-adds two helpers:
+`rusqlite-derive` maps SQLite rows to Rust structs. Deriving `RusqliteFetch` adds two helpers:
 
 - `fetch`, which returns every row from a configured SQL source;
 - `fetch_with_filter`, which adds a caller-provided expression after `WHERE`.
 
-The crate is a small convenience layer over
-[`rusqlite`](https://crates.io/crates/rusqlite), not an ORM. It does not manage
-schemas or generate inserts, updates, deletes, relationships, or arbitrary
-queries.
+The crate is a small convenience layer over [`rusqlite`](https://crates.io/crates/rusqlite), not an ORM. It does not manage schemas or generate inserts, updates, deletes, relationships, or arbitrary queries.
 
 ## Installation
 
-Add `rusqlite-derive` and `rusqlite` to your application. The generated code
-refers to `rusqlite` directly.
+Add `rusqlite-derive` and `rusqlite` to your application. The generated code refers to `rusqlite` directly.
 
 ```toml
 [dependencies]
@@ -22,8 +17,7 @@ rusqlite = "0.38"
 rusqlite-derive = "0.1"
 ```
 
-This crate does not enable any rusqlite features. If your system does not
-provide SQLite, enable rusqlite's `bundled` feature:
+This crate does not enable any rusqlite features. If your system does not provide SQLite, enable rusqlite's `bundled` feature:
 
 ```toml
 [dependencies]
@@ -75,13 +69,11 @@ SELECT id, name, active FROM users;
 SELECT id, name, active FROM users WHERE <filter>;
 ```
 
-Selected values are decoded with `rusqlite::Row::get` in field declaration
-order. Each selected field type must therefore implement `FromSql`.
+Selected values are decoded with `rusqlite::Row::get` in field declaration order. Each selected field type must therefore implement `FromSql`.
 
 ## Configuring the mapping
 
-By default, the struct name becomes the SQL `FROM` source and each named field
-becomes a select expression. The following attributes override that behavior:
+By default, the struct name becomes the SQL `FROM` source and each named field becomes a select expression. The following attributes override that behavior:
 
 | Attribute                     | Location | Effect                                                                       |
 |-------------------------------|----------|------------------------------------------------------------------------------|
@@ -91,8 +83,7 @@ becomes a select expression. The following attributes override that behavior:
 
 `default` and `select` cannot be used on the same field.
 
-Attribute values are unquoted SQL fragments. This permits qualified columns,
-expressions, aliases, and joins:
+Attribute values are unquoted SQL fragments. This permits qualified columns, expressions, aliases, and joins:
 
 ```rust
 use rusqlite_derive::RusqliteFetch;
@@ -118,8 +109,7 @@ FROM users AS u JOIN teams AS t ON t.id = u.team_id;
 
 ### Tuple structs
 
-Tuple structs are supported. Because unnamed fields have no default column
-name, every field must use either `select` or `default`:
+Tuple structs are supported. Because unnamed fields have no default column name, every field must use either `select` or `default`:
 
 ```rust
 use rusqlite_derive::RusqliteFetch;
@@ -150,18 +140,13 @@ struct User<T, Marker> {
 }
 ```
 
-Generic parameters and existing `where` clauses are preserved. The derive adds
-`FromSql` bounds for selected field types that depend on generic parameters and
-`Default` bounds for defaulted field types that depend on them.
+Generic parameters and existing `where` clauses are preserved. The derive adds `FromSql` bounds for selected field types that depend on generic parameters and `Default` bounds for defaulted field types that depend on them.
 
-Unit structs and structs whose fields are all defaulted are also supported. The
-generated query selects a constant so that each matching source row still
-produces one value.
+Unit structs and structs whose fields are all defaulted are also supported. The generated query selects a constant so that each matching source row still produces one value.
 
 ## Filtering safely
 
-> **Warning:** `fetch_with_filter` inserts its filter argument into the SQL
-> statement verbatim. Parameter binding protects values, not SQL structure.
+> **Warning:** `fetch_with_filter` inserts its filter argument into the SQL statement verbatim. Parameter binding protects values, not SQL structure.
 
 Bind dynamic values with rusqlite placeholders:
 
@@ -184,15 +169,10 @@ let users = User::fetch_with_filter(
 )?;
 ```
 
-Never construct the filter's SQL structure - such as column names, operators, or
-ordering expressions - from untrusted input. Parameters are bound to the complete
-generated statement, so placeholders in configured `select` or `from` fragments
-also consume parameters.
+Never construct the filter's SQL structure - such as column names, operators, or ordering expressions - from untrusted input. Parameters are bound to the complete generated statement, so placeholders in configured `select` or `from` fragments also consume parameters.
 
 ## Limitations
 
-- Both helpers collect all matching rows into a `Vec`; they do not provide
-  streaming or pagination.
+- Both helpers collect all matching rows into a `Vec`; they do not provide streaming or pagination.
 - SQL identifiers and fragments are neither validated nor quoted.
-- The derive only generates reads; writes and migrations remain the
-  application's responsibility.
+- The derive only generates reads; writes and migrations remain the application's responsibility.
