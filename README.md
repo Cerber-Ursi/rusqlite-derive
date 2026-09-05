@@ -1,15 +1,17 @@
 # rusqlite-derive
 
-`rusqlite-derive` maps SQLite rows to Rust structs. Deriving `RusqliteFetch` adds two helpers:
+`rusqlite-derive` maps SQLite rows to Rust structs and generates complete-record write operations. It is a small convenience layer over [`rusqlite`](https://crates.io/crates/rusqlite), not a schema-aware ORM.
 
-- `fetch`, which returns every row from a configured SQL source;
-- `fetch_with_filter`, which adds a caller-provided expression after `WHERE`.
+Two derives are available:
 
-The crate is a small convenience layer over [`rusqlite`](https://crates.io/crates/rusqlite), not an ORM. It does not manage schemas or generate inserts, updates, deletes, relationships, or arbitrary queries.
+- `RusqliteFetch` reads rows from a configured SQL source;
+- `RusqliteWrite` inserts, updates, and upserts complete table-backed records.
+
+The derives are independent: projections and views can derive only `RusqliteFetch`, while writable records can derive either or both traits.
 
 ## Installation
 
-Add `rusqlite-derive` and `rusqlite` to your application. The generated code refers to `rusqlite` directly.
+Add `rusqlite-derive` and `rusqlite` to your application. Generated code refers to `rusqlite` directly.
 
 ```toml
 [dependencies]
@@ -20,21 +22,21 @@ rusqlite-derive = "0.1"
 This crate does not enable any rusqlite features. If your system does not provide SQLite, enable rusqlite's `bundled` feature:
 
 ```toml
-[dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
-rusqlite-derive = "0.1"
 ```
 
 ## Quick start
 
 ```rust
 use rusqlite::Connection;
-use rusqlite_derive::RusqliteFetch;
+use rusqlite_derive::{RusqliteFetch, RusqliteWrite};
 
-#[derive(Debug, PartialEq, RusqliteFetch)]
-#[rusqlite(from = "users")]
+#[derive(Debug, PartialEq, RusqliteFetch, RusqliteWrite)]
+#[rusqlite(table = "users")]
 struct User {
+    #[rusqlite(key)]
     id: i64,
+    #[rusqlite(column = "display_name")]
     name: String,
     active: bool,
 }
@@ -42,54 +44,91 @@ struct User {
 fn main() -> rusqlite::Result<()> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(
-        "CREATE TABLE users (id INTEGER, name TEXT, active INTEGER);
-         INSERT INTO users VALUES
-             (1, 'Ada', 1),
-             (2, 'Grace', 0);",
+        "CREATE TABLE users (
+             id INTEGER PRIMARY KEY,
+             display_name TEXT NOT NULL,
+             active INTEGER NOT NULL
+         );",
     )?;
 
-    let users = User::fetch(&conn)?;
-    assert_eq!(users.len(), 2);
-
-    let active = User::fetch_with_filter(&conn, "active = ?1", rusqlite::params![true])?;
-    assert_eq!(active, vec![User {
+    let mut user = User {
         id: 1,
-        name: "Ada".to_owned(),
+        name: "Ada".into(),
         active: true,
-    }]);
+    };
+    user.insert(&conn)?;
 
+    user.active = false;
+    user.update(&conn)?;
+
+    let users = User::fetch(&conn)?;
+    assert_eq!(users, vec![user]);
     Ok(())
 }
 ```
 
-This derive generates queries equivalent to:
+## Mapping attributes
 
-```sql
-SELECT id, name, active FROM users;
-SELECT id, name, active FROM users WHERE <filter>;
-```
+Struct attributes:
 
-Selected values are decoded with `rusqlite::Row::get` in field declaration order. Each selected field type must therefore implement `FromSql`.
+| Attribute                    | Used by         | Effect                                                                         |
+|------------------------------|-----------------|--------------------------------------------------------------------------------|
+| `#[rusqlite(table = "...")]` | Both derives    | Names the writable table and default read source. Required by `RusqliteWrite`. |
+| `#[rusqlite(from = "...")]`  | `RusqliteFetch` | Replaces the complete read `FROM` fragment.                                    |
 
-## Configuring the mapping
+The read source is chosen in this order: `from`, `table`, then the Rust struct name. The write target is always `table`; it is never inferred from `from`, which may contain a join or subquery.
 
-By default, the struct name becomes the SQL `FROM` source and each named field becomes a select expression. The following attributes override that behavior:
+Field attributes:
 
-| Attribute                          | Location | Effect                                                                       |
-|------------------------------------|----------|------------------------------------------------------------------------------|
-| `#[rusqlite(table = "...")]`       | Struct   | Supplies a simple table as the read source when `from` is absent.            |
-| `#[rusqlite(from = "...")]`        | Struct   | Replaces the complete `FROM` fragment.                                       |
-| `#[rusqlite(column = "...")]`      | Field    | Supplies a simple field expression when `select` is absent.                  |
-| `#[rusqlite(select = "...")]`      | Field    | Replaces the field's select expression.                                      |
-| `#[rusqlite(read_default)]`        | Field    | Omits the field from the query and initializes it with `Default::default()`. |
+| Attribute                     | Effect                                                                  |
+|-------------------------------|-------------------------------------------------------------------------|
+| `#[rusqlite(column = "...")]` | Sets the column used for writes and as the default read expression.     |
+| `#[rusqlite(select = "...")]` | Overrides the read expression.                                          |
+| `#[rusqlite(read_default)]`   | Omits the field from reads and uses `Default::default()`.               |
+| `#[rusqlite(key)]`            | Includes the field in update predicates and the upsert conflict target. |
+| `#[rusqlite(skip_insert)]`    | Omits the field from inserts and the insert path of upserts.            |
+| `#[rusqlite(skip_update)]`    | Omits a non-key field from update assignments.                          |
+| `#[rusqlite(skip_write)]`     | Excludes a field from all write operations.                             |
 
-`read_default` and `select` cannot be used on the same field.
-
-Attribute values are unquoted SQL fragments. This permits qualified columns, expressions, aliases, and joins:
+For an ordinary named field, the Rust field name is the default read expression and writable column. `column` can rename both; `select` can independently override the read expression:
 
 ```rust
-use rusqlite_derive::RusqliteFetch;
+#[rusqlite(column = "name", select = "upper(u.name)")]
+name: String,
+```
 
+A `select` expression alone does not identify a writable column. When deriving `RusqliteWrite`, such a field must also specify `column` or `skip_write`.
+
+Tuple fields have no implicit column name. For reads, each tuple field requires `select`, `column`, or `read_default`; for writes, it requires `column` or `skip_write`.
+
+Attribute strings are trusted, unquoted SQL fragments. The macro checks mapping consistency but does not parse identifiers or inspect the database schema.
+
+## Reading
+
+`RusqliteFetch` supplies:
+
+```rust
+fn fetch(conn: &Connection) -> rusqlite::Result<Vec<Self>>;
+fn fetch_with_filter<P: rusqlite::Params>(
+    conn: &Connection,
+    filter: &str,
+    params: P,
+) -> rusqlite::Result<Vec<Self>>;
+```
+
+For the quick-start model, `fetch` generates:
+
+```sql
+SELECT id, display_name, active FROM users;
+```
+
+Selected values are decoded with `rusqlite::Row::get` in field declaration order. Selected field types must implement `FromSql`.
+
+### Projections and joins
+
+`from` and `select` may contain aliases, joins, and expressions:
+
+```rust
 #[derive(RusqliteFetch)]
 #[rusqlite(from = "users AS u JOIN teams AS t ON t.id = u.team_id")]
 struct UserWithTeam {
@@ -102,79 +141,101 @@ struct UserWithTeam {
 }
 ```
 
-The generated query is:
+### Filtering safely
+
+`fetch_with_filter` inserts its filter argument into SQL verbatim. Parameter binding protects values, not SQL structure:
+
+```rust
+let users = User::fetch_with_filter(
+    &conn,
+    "active = ?1 ORDER BY id LIMIT ?2",
+    rusqlite::params![true, 10],
+)?;
+```
+
+Never construct SQL structure - such as column names or operators - from untrusted input.
+
+Placeholders in configured `select` and `from` fragments also consume parameters.
+
+## Writing
+
+`RusqliteWrite` requires an explicit `table`, at least one `key`, at least one insertable field, and at least one updatable non-key field. It supplies:
+
+```rust
+fn insert(&self, conn: &Connection) -> rusqlite::Result<usize>;
+fn update(&self, conn: &Connection) -> rusqlite::Result<usize>;
+fn upsert(&self, conn: &Connection) -> rusqlite::Result<usize>;
+```
+
+Every value is bound through `ToSql`. The methods return SQLite's affected-row count, including `Ok(0)` when an update finds no matching row.
+
+For the quick-start model, the generated statements are equivalent to:
 
 ```sql
-SELECT u.id, upper(u.name), t.name
-FROM users AS u JOIN teams AS t ON t.id = u.team_id;
+INSERT INTO users (id, display_name, active) VALUES (?1, ?2, ?3);
+
+UPDATE users
+SET display_name = ?1, active = ?2
+WHERE id = ?3;
+
+INSERT INTO users (id, display_name, active) VALUES (?1, ?2, ?3)
+ON CONFLICT (id) DO UPDATE SET
+    display_name = excluded.display_name,
+    active = excluded.active;
 ```
 
-### Tuple structs
+### Keys and generated values
 
-Tuple structs are supported. Because unnamed fields have no default column name, every field must use `select`, `column`, or `read_default`:
+Multiple `key` fields form an `AND` update predicate and a composite upsert conflict target. SQLite must have a corresponding primary-key or unique constraint; the derive cannot verify this.
+
+Use `skip_insert` for a database-generated key:
 
 ```rust
-use rusqlite_derive::RusqliteFetch;
-
-#[derive(RusqliteFetch)]
-#[rusqlite(from = "users")]
-struct User(
-    #[rusqlite(select = "id")] i64,
-    #[rusqlite(select = "name")] String,
-);
+#[rusqlite(key, skip_insert)]
+id: i64,
 ```
 
-### Defaulted and generic fields
+A key cannot use `skip_write`, because it is still required by update predicates. The derive diagnostic points generated-key users to `skip_insert`.
 
-A defaulted field is not included in the `SELECT` list:
+Avoid `upsert` when any key in the conflict target is generated or skipped on insert. The insert path does not supply that key from `self`, so SQLite usually generates or defaults it instead of finding a conflict with `self`'s complete key. Use `insert` for new records and `update` for records fetched previously.
+
+Keys should also be non-null. An update predicate such as `key = NULL` matches nothing, and SQLite unique constraints commonly permit multiple `NULL` values, so an upsert with a null key may repeatedly insert rows.
+
+### Complete updates
+
+`update` assigns every eligible non-key field. It does not track changes or provide patch semantics. In particular, `Option::None` writes SQL `NULL`; it does not mean “leave this column unchanged”. Use `skip_update` for a field that must never be assigned by updates, or use rusqlite directly for dynamic patches.
+
+`upsert` uses the same insert field set as `insert` and the same assignment set as `update`. Fields included in the insert are assigned from `excluded`; an updatable field marked `skip_insert` is bound separately so the conflict path writes its value from `self`, while the insert path still uses its database default.
+
+### Read-only and local fields
+
+Fields that are not stored must explicitly opt out of writes:
 
 ```rust
-use std::marker::PhantomData;
-use rusqlite_derive::RusqliteFetch;
+#[rusqlite(select = "upper(name)", skip_write)]
+uppercase_name: String,
 
-#[derive(RusqliteFetch)]
-#[rusqlite(from = "users")]
-struct User<T, Marker> {
-    id: T,
-    name: String,
-    #[rusqlite(read_default)]
-    marker: PhantomData<Marker>,
-}
+#[rusqlite(read_default, skip_write)]
+local_state: LocalState,
 ```
 
-Generic parameters and existing `where` clauses are preserved. The derive adds `FromSql` bounds for selected field types that depend on generic parameters and `Default` bounds for defaulted field types that depend on them.
+`read_default` and write participation are independent. A read-defaulted field can still be writable when it has a resolved column and is not skipped.
 
-Unit structs and structs whose fields are all defaulted are also supported. The generated query selects a constant so that each matching source row still produces one value.
+## Generics and fieldless structs
 
-## Filtering safely
+Generic parameters and existing `where` clauses are preserved. The derives add bounds for generic-dependent fields:
 
-> **Warning:** `fetch_with_filter` inserts its filter argument into the SQL statement verbatim. Parameter binding protects values, not SQL structure.
+- `FromSql` for selected fields;
+- `Default` for `read_default` fields;
+- `ToSql` for writable fields.
 
-Bind dynamic values with rusqlite placeholders:
-
-```rust
-let minimum_id = 10;
-let users = User::fetch_with_filter(
-    &conn,
-    "id > ?1 ORDER BY id",
-    rusqlite::params![minimum_id],
-)?;
-```
-
-Named parameters are supported through rusqlite as well:
-
-```rust
-let users = User::fetch_with_filter(
-    &conn,
-    "id > :minimum_id ORDER BY id",
-    rusqlite::named_params! { ":minimum_id": minimum_id },
-)?;
-```
-
-Never construct the filter's SQL structure - such as column names, operators, or ordering expressions - from untrusted input. Parameters are bound to the complete generated statement, so placeholders in configured `select` or `from` fragments also consume parameters.
+`RusqliteFetch` supports unit, empty, and all-read-defaulted structs by selecting a constant. `RusqliteWrite` intentionally rejects models without a key, insertable field, or updatable non-key field.
 
 ## Limitations
 
-- Both helpers collect all matching rows into a `Vec`; they do not provide streaming or pagination.
-- SQL identifiers and fragments are neither validated nor quoted.
-- The derive only generates reads; writes and migrations remain the application's responsibility.
+- Fetch helpers collect all matching rows into a `Vec`.
+- Writes operate on complete records; there are no partial updates or batches.
+- There is no `RETURNING` helper or automatic hydration of generated values.
+- Deletes, migrations, relationships, optimistic locking, and schema management remain the application's responsibility.
+- SQL identifiers and fragments are neither parsed, validated, nor quoted. Inferred raw Rust identifiers have their `r#` prefix removed, but names that are SQLite keywords still need an explicit quoted `column` fragment.
+- Schema mismatches, missing unique constraints, and constraint violations are reported by SQLite at runtime.

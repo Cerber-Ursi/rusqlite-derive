@@ -1,0 +1,5 @@
+error: RusqliteWrite requires at least one updatable non-key field
+ --> tests/ui/fail/write_no_updatable_field.rs:5:8
+  |
+5 | struct Record {
+  |        ^^^^^^

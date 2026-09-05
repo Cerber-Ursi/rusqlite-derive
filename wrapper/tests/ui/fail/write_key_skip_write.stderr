@@ -1,0 +1,6 @@
+error: key fields participate in update predicates; for a database-generated key, use #[rusqlite(key, skip_insert)] instead of skip_write
+ --> tests/ui/fail/write_key_skip_write.rs:6:5
+  |
+6 | /     #[rusqlite(key, skip_write)]
+7 | |     id: i64,
+  | |___________^

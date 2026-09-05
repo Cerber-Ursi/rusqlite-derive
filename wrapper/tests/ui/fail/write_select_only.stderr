@@ -1,0 +1,6 @@
+error: field has a read expression but no writable column; add #[rusqlite(column = "...")] or #[rusqlite(skip_write)]
+ --> tests/ui/fail/write_select_only.rs:8:5
+  |
+8 | /     #[rusqlite(select = "upper(value)")]
+9 | |     value: String,
+  | |_________________^

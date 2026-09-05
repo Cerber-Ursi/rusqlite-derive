@@ -1,0 +1,6 @@
+error: key field has no writable column; add #[rusqlite(column = "...")]
+ --> tests/ui/fail/write_key_without_column.rs:6:5
+  |
+6 | /     #[rusqlite(key, select = "r.id")]
+7 | |     id: i64,
+  | |___________^

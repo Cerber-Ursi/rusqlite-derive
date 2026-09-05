@@ -1,4 +1,4 @@
-error: supported fields are `select`, `column` and `read_default`
+error: supported fields are `select`, `column`, `read_default`, `key`, `skip_insert`, `skip_update` and `skip_write`
  --> tests/ui/fail/unknown_field_attribute.rs:5:16
   |
 5 |     #[rusqlite(rename = "id")]
