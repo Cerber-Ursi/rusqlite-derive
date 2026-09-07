@@ -1,5 +1,7 @@
-use rusqlite::{Connection, Error};
-use rusqlite_derive::{RusqliteFetch, RusqliteWrite};
+use rusqlite_derive::{
+    RusqliteFetch, RusqliteWrite,
+    rusqlite::{Connection, Error},
+};
 use std::marker::PhantomData;
 
 #[derive(Clone, Debug, PartialEq, RusqliteFetch, RusqliteWrite)]

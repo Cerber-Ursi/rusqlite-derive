@@ -7,8 +7,10 @@
 //! # Example
 //!
 //! ```
-//! use rusqlite::Connection;
-//! use rusqlite_derive::{RusqliteFetch, RusqliteWrite};
+//! use rusqlite_derive::{
+//!     rusqlite::{self, Connection},
+//!     RusqliteFetch, RusqliteWrite,
+//! };
 //!
 //! #[derive(Debug, PartialEq, RusqliteFetch, RusqliteWrite)]
 //! #[rusqlite(table = "users")]
@@ -38,6 +40,22 @@
 //! # Ok::<(), rusqlite::Error>(())
 //! ```
 //!
+//! # Renaming the dependency
+//!
+//! Generated code refers to this wrapper as `::rusqlite_derive` by default. If
+//! the dependency has been renamed, set its path on the derived struct:
+//!
+//! ```
+//! use rusqlite_derive as rd;
+//! use rd::RusqliteFetch;
+//!
+//! #[derive(RusqliteFetch)]
+//! #[rusqlite(crate = "rd")]
+//! struct Record {
+//!     value: i64,
+//! }
+//! ```
+//!
 //! # Mapping attributes
 //!
 //! - `#[rusqlite(table = "...")]` names the writable table and acts as the
@@ -61,6 +79,8 @@
 //! Bind dynamic values with placeholders and its parameter argument. Never
 //! include untrusted SQL structure in the filter.
 
+/// The rusqlite release used by the generated implementations.
+pub use rusqlite;
 pub use rusqlite_derive_impl::{RusqliteFetch, RusqliteWrite};
 
 /// Fetches values of a struct from SQLite.

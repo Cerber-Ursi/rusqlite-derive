@@ -1,6 +1,4 @@
 error: expected string literal
-
-       = help: try `#[rusqlite(from = ...)]`
  --> tests/ui/fail/wrong_attribute_value.rs:4:19
   |
 4 | #[rusqlite(from = 42)]

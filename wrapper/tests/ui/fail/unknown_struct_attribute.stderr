@@ -1,4 +1,4 @@
-error: supported fields are `from` and `table`
+error: supported fields are `from`, `table`, and `crate`
  --> tests/ui/fail/unknown_struct_attribute.rs:4:12
   |
 4 | #[rusqlite(source = "records")]

@@ -11,25 +11,42 @@ The derives are independent: projections and views can derive only `RusqliteFetc
 
 ## Installation
 
-Add `rusqlite-derive` and `rusqlite` to your application. Generated code refers to `rusqlite` directly.
+Add `rusqlite-derive` to your application. It re-exports the compatible rusqlite release used by the generated code.
 
 ```toml
 [dependencies]
-rusqlite = "0.38"
 rusqlite-derive = "0.1"
 ```
 
-This crate does not enable any rusqlite features. If your system does not provide SQLite, enable rusqlite's `bundled` feature:
+If your system does not provide SQLite, enable the forwarded `bundled` feature:
 
 ```toml
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite-derive = { version = "0.1", features = ["bundled"] }
+```
+
+You can also depend directly on a compatible `rusqlite` 0.40 release when you need features that `rusqlite-derive` does not forward. Cargo will unify the dependency and its enabled features.
+
+### Renaming the dependency
+
+Generated code refers to the wrapper as `::rusqlite_derive` by default. Set `crate` when the dependency has been renamed:
+
+```rust
+use rd::RusqliteFetch;
+
+#[derive(RusqliteFetch)]
+#[rusqlite(crate = "rd")]
+struct Record {
+    value: i64,
+}
 ```
 
 ## Quick start
 
 ```rust
-use rusqlite::Connection;
-use rusqlite_derive::{RusqliteFetch, RusqliteWrite};
+use rusqlite_derive::{
+    rusqlite::{self, Connection},
+    RusqliteFetch, RusqliteWrite,
+};
 
 #[derive(Debug, PartialEq, RusqliteFetch, RusqliteWrite)]
 #[rusqlite(table = "users")]

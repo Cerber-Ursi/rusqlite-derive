@@ -14,6 +14,11 @@ use syn::{ext::IdentExt, spanned::Spanned};
 /// `select` sets a read expression, `column` sets a storage column and default
 /// read expression, and `read_default` omits a field from reads and initializes
 /// it with `Default::default()`.
+///
+/// # Renaming the dependency
+///
+/// `#[rusqlite(crate = "...")]` overrides the wrapper crate path when its
+/// dependency has been renamed.
 #[proc_macro_derive(RusqliteFetch, attributes(rusqlite))]
 pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -28,9 +33,14 @@ pub fn derive_fetch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// Derives complete-record SQLite write helpers for a struct.
 ///
 /// The struct must specify `#[rusqlite(table = "...")]` and mark at least one
-/// field with `#[rusqlite(key)]`. It must also have at least one insertable field
-/// and one updatable non-key field. Values are bound through `ToSql` for
-/// `insert`, key-based `update`, and `upsert` operations.
+/// field with `#[rusqlite(key)]`. The struct must also have at least one
+/// insertable field and one updatable non-key field. Values are bound through
+/// `ToSql` for `insert`, key-based `update`, and `upsert` operations.
+///
+/// # Renaming the dependency
+///
+/// `#[rusqlite(crate = "...")]` overrides the wrapper crate path when its
+/// dependency has been renamed.
 #[proc_macro_derive(RusqliteWrite, attributes(rusqlite))]
 pub fn derive_write(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -42,11 +52,79 @@ pub fn derive_write(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     .into()
 }
 
-#[derive(FromAttr)]
-#[attribute(ident = rusqlite)]
 struct RusqliteTable {
     from: Option<String>,
     table: Option<String>,
+    crate_path: Option<syn::Path>,
+}
+
+impl RusqliteTable {
+    fn from_attributes(attributes: &[syn::Attribute]) -> syn::Result<Self> {
+        let mut from = None;
+        let mut table = None;
+        let mut crate_path = None;
+        let mut errors: Option<syn::Error> = None;
+
+        for attribute in attributes
+            .iter()
+            .filter(|attribute| attribute.path().is_ident("rusqlite"))
+        {
+            attribute.parse_nested_meta(|meta| {
+                let name = if meta.path.is_ident("from") {
+                    "from"
+                } else if meta.path.is_ident("table") {
+                    "table"
+                } else if meta.path.is_ident("crate") {
+                    "crate"
+                } else {
+                    return Err(meta.error("supported fields are `from`, `table`, and `crate`"));
+                };
+                let value = meta.value()?.parse::<syn::LitStr>()?;
+
+                match name {
+                    "from" => set_once(&mut from, value.value(), &value, name, &mut errors),
+                    "table" => set_once(&mut table, value.value(), &value, name, &mut errors),
+                    "crate" => {
+                        let path = value.parse::<syn::Path>()?;
+                        set_once(&mut crate_path, path, &value, name, &mut errors);
+                    }
+                    _ => unreachable!("all supported attributes were matched"),
+                }
+                Ok(())
+            })?;
+        }
+
+        if let Some(error) = errors {
+            return Err(error);
+        }
+
+        Ok(Self {
+            from: from.map(|(value, _)| value),
+            table: table.map(|(value, _)| value),
+            crate_path: crate_path.map(|(value, _)| value),
+        })
+    }
+}
+
+fn set_once<T>(
+    slot: &mut Option<(T, proc_macro2::Span)>,
+    value: T,
+    value_literal: &syn::LitStr,
+    name: &str,
+    errors: &mut Option<syn::Error>,
+) {
+    if let Some((_, first_span)) = slot {
+        let message = format!("`{name}` is specified multiple times");
+        let mut error = syn::Error::new(*first_span, &message);
+        error.combine(syn::Error::new(value_literal.span(), message));
+        if let Some(errors) = errors {
+            errors.combine(error);
+        } else {
+            *errors = Some(error);
+        }
+    } else {
+        *slot = Some((value, value_literal.span()));
+    }
 }
 
 #[derive(FromAttr)]
@@ -82,6 +160,9 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .from
         .or(table_attr.table)
         .unwrap_or_else(|| name.unraw().to_string());
+    let crate_path = table_attr
+        .crate_path
+        .unwrap_or_else(|| syn::parse_quote!(::rusqlite_derive));
 
     let (columns, row_value) = match data.fields {
         syn::Fields::Named(fields) => {
@@ -109,7 +190,11 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                         .or(attr.column)
                         .unwrap_or_else(|| field_name.unraw().to_string());
                     columns.push(column);
-                    add_field_bound(&mut generics, ty, quote::quote!(::rusqlite::types::FromSql));
+                    add_field_bound(
+                        &mut generics,
+                        ty,
+                        quote::quote!(#crate_path::rusqlite::types::FromSql),
+                    );
                     let value = quote::quote_spanned! { ty.span() =>
                         row.get::<_, #ty>(#index)?
                     };
@@ -141,7 +226,11 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     })?;
                     let index = columns.len();
                     columns.push(column);
-                    add_field_bound(&mut generics, ty, quote::quote!(::rusqlite::types::FromSql));
+                    add_field_bound(
+                        &mut generics,
+                        ty,
+                        quote::quote!(#crate_path::rusqlite::types::FromSql),
+                    );
                     values.push(quote::quote_spanned! { ty.span() =>
                         row.get::<_, #ty>(#index)?,
                     });
@@ -165,8 +254,8 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote::quote! {
-        impl #impl_generics ::rusqlite_derive::RusqliteFetch for #name #type_generics #where_clause {
-            fn fetch(conn: &::rusqlite::Connection) -> ::rusqlite::Result<Vec<Self>> {
+        impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
+            fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
                 conn
                     .prepare(#query_simple)?
                     .query_map([], |row| {
@@ -175,11 +264,11 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     .collect()
             }
 
-            fn fetch_with_filter<P: ::rusqlite::Params>(
-                conn: &::rusqlite::Connection,
+            fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
+                conn: &#crate_path::rusqlite::Connection,
                 filter: &str,
                 params: P,
-            ) -> ::rusqlite::Result<Vec<Self>> {
+            ) -> #crate_path::rusqlite::Result<Vec<Self>> {
                 let mut query = ::std::string::String::from(#query_with_where);
                 query.push_str(filter);
                 query.push(';');
@@ -218,6 +307,9 @@ fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let table = table_attr.table.ok_or_else(|| {
         syn::Error::new_spanned(&name, "RusqliteWrite requires #[rusqlite(table = \"...\")]")
     })?;
+    let crate_path = table_attr
+        .crate_path
+        .unwrap_or_else(|| syn::parse_quote!(::rusqlite_derive));
 
     let mut write_fields = Vec::new();
     match data.fields {
@@ -342,7 +434,7 @@ fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         add_field_bound(
             &mut generics,
             &field.ty,
-            quote::quote!(::rusqlite::types::ToSql),
+            quote::quote!(#crate_path::rusqlite::types::ToSql),
         );
     }
 
@@ -404,29 +496,31 @@ fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         "INSERT INTO {table} ({insert_columns}) VALUES ({insert_placeholders}) ON CONFLICT ({conflict_columns}) DO UPDATE SET {upsert_assignments};"
     );
 
-    let insert_values = insert_fields.iter().map(|field| field_value(field));
+    let insert_values = insert_fields
+        .iter()
+        .map(|field| field_value(field, &crate_path));
     let update_values = update_fields
         .iter()
         .chain(keys.iter())
-        .map(|field| field_value(field));
+        .map(|field| field_value(field, &crate_path));
     let upsert_values = insert_fields
         .iter()
         .chain(separately_bound_upsert_fields.iter())
-        .map(|field| field_value(field));
+        .map(|field| field_value(field, &crate_path));
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote::quote! {
-        impl #impl_generics ::rusqlite_derive::RusqliteWrite for #name #type_generics #where_clause {
-            fn insert(&self, conn: &::rusqlite::Connection) -> ::rusqlite::Result<usize> {
-                conn.execute(#insert_query, ::rusqlite::params![#(#insert_values),*])
+        impl #impl_generics #crate_path::RusqliteWrite for #name #type_generics #where_clause {
+            fn insert(&self, conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<usize> {
+                conn.execute(#insert_query, #crate_path::rusqlite::params![#(#insert_values),*])
             }
 
-            fn update(&self, conn: &::rusqlite::Connection) -> ::rusqlite::Result<usize> {
-                conn.execute(#update_query, ::rusqlite::params![#(#update_values),*])
+            fn update(&self, conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<usize> {
+                conn.execute(#update_query, #crate_path::rusqlite::params![#(#update_values),*])
             }
 
-            fn upsert(&self, conn: &::rusqlite::Connection) -> ::rusqlite::Result<usize> {
-                conn.execute(#upsert_query, ::rusqlite::params![#(#upsert_values),*])
+            fn upsert(&self, conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<usize> {
+                conn.execute(#upsert_query, #crate_path::rusqlite::params![#(#upsert_values),*])
             }
         }
     })
@@ -454,11 +548,11 @@ fn validate_skip_combination(field: &syn::Field, attr: &RusqliteField) -> syn::R
     Ok(())
 }
 
-fn field_value(field: &WriteField) -> proc_macro2::TokenStream {
+fn field_value(field: &WriteField, crate_path: &syn::Path) -> proc_macro2::TokenStream {
     let member = &field.member;
     let ty = &field.ty;
     quote::quote_spanned! { ty.span() =>
-        &self.#member as &dyn ::rusqlite::types::ToSql
+        &self.#member as &dyn #crate_path::rusqlite::types::ToSql
     }
 }
 
