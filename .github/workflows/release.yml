@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Validate release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          metadata = json.loads(
+              subprocess.check_output(
+                  ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                  text=True,
+              )
+          )
+          release_packages = {"rusqlite-derive", "rusqlite-derive-impl"}
+          versions = {
+              package["version"]
+              for package in metadata["packages"]
+              if package["name"] in release_packages
+          }
+          found_packages = {
+              package["name"]
+              for package in metadata["packages"]
+              if package["name"] in release_packages
+          }
+          if found_packages != release_packages:
+              raise SystemExit(f"expected packages {sorted(release_packages)}, found {sorted(found_packages)}")
+          if len(versions) != 1:
+              raise SystemExit(f"release package versions differ: {sorted(versions)}")
+
+          version = versions.pop()
+          tag = os.environ["RELEASE_TAG"]
+          if tag != f"v{version}":
+              raise SystemExit(f"tag {tag!r} does not match package version {version!r}")
+
+          changelog = pathlib.Path("CHANGELOG.md").read_text()
+          heading = re.compile(rf"^## \[{re.escape(version)}\](?: - .+)?$", re.MULTILINE)
+          match = heading.search(changelog)
+          if match is None:
+              raise SystemExit(f"CHANGELOG.md has no section for {version}")
+
+          body_start = match.end()
+          next_heading = re.search(r"^## ", changelog[body_start:], re.MULTILINE)
+          body_end = body_start + next_heading.start() if next_heading else len(changelog)
+          notes = changelog[body_start:body_end].strip()
+          if not notes:
+              raise SystemExit(f"CHANGELOG.md section for {version} is empty")
+
+          target = pathlib.Path("target")
+          target.mkdir(exist_ok=True)
+          (target / "release-notes.md").write_text(notes + "\n")
+          (target / "release-version").write_text(version + "\n")
+          PY
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-targets --all-features
+      - run: cargo test --workspace --doc --all-features
+
+      - name: Authenticate with crates.io
+        id: crates-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          version="$(<target/release-version)"
+          user_agent="rusqlite-derive release workflow (https://github.com/Cerber-Ursi/rusqlite-derive)"
+
+          is_published() {
+            local crate="$1"
+            local status
+            status="$(curl \
+              --silent \
+              --show-error \
+              --location \
+              --retry 3 \
+              --retry-all-errors \
+              --user-agent "$user_agent" \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/$crate/$version")"
+            case "$status" in
+              200) return 0 ;;
+              404) return 1 ;;
+              *) echo "crates.io returned HTTP $status for $crate $version" >&2; exit 1 ;;
+            esac
+          }
+
+          if is_published rusqlite-derive-impl; then
+            echo "rusqlite-derive-impl $version is already published"
+          else
+            cargo publish --locked -p rusqlite-derive-impl
+          fi
+
+          for attempt in $(seq 1 12); do
+            if is_published rusqlite-derive; then
+              echo "rusqlite-derive $version is already published"
+              break
+            fi
+            if cargo publish --locked -p rusqlite-derive; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "failed to publish rusqlite-derive $version after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "waiting for the crates.io index before retrying ($attempt/12)"
+            sleep 10
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub release $RELEASE_TAG already exists"
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --notes-file target/release-notes.md
+          fi
