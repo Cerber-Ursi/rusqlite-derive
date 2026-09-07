@@ -1,8 +1,14 @@
 [package]
 name = "rusqlite-derive"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Derive-based row and table mapping for rusqlite"
+readme = "../README.md"
+keywords = ["sqlite", "database", "derive", "rusqlite"]
+categories = ["database"]
 
 [features]
 default = []
@@ -10,7 +16,7 @@ bundled = ["rusqlite/bundled"]
 
 [dependencies]
 rusqlite = { version = "0.40.2", default-features = false }
-rusqlite-derive-impl = { version = "=0.1.0", path = "../impl" }
+rusqlite-derive-impl = { version = "=1.0.0", path = "../impl" }
 
 [dev-dependencies]
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }

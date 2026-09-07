@@ -15,13 +15,13 @@ Add `rusqlite-derive` to your application. It re-exports the compatible rusqlite
 
 ```toml
 [dependencies]
-rusqlite-derive = "0.1"
+rusqlite-derive = "1"
 ```
 
 If your system does not provide SQLite, enable the forwarded `bundled` feature:
 
 ```toml
-rusqlite-derive = { version = "0.1", features = ["bundled"] }
+rusqlite-derive = { version = "1", features = ["bundled"] }
 ```
 
 You can also depend directly on a compatible `rusqlite` 0.40 release when you need features that `rusqlite-derive` does not forward. Cargo will unify the dependency and its enabled features.
