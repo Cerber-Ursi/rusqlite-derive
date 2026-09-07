@@ -161,7 +161,7 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         columns.join(", ")
     };
     let query_simple = format!("SELECT {select} FROM {source};");
-    let query_with_where = format!("SELECT {select} FROM {source} WHERE {{}};");
+    let query_with_where = format!("SELECT {select} FROM {source} WHERE ");
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote::quote! {
@@ -180,8 +180,11 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 filter: &str,
                 params: P,
             ) -> ::rusqlite::Result<Vec<Self>> {
+                let mut query = ::std::string::String::from(#query_with_where);
+                query.push_str(filter);
+                query.push(';');
                 conn
-                    .prepare(&format!(#query_with_where, filter))?
+                    .prepare(&query)?
                     .query_map(params, |row| {
                         Ok(#row_value)
                     })?

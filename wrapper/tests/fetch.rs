@@ -71,6 +71,13 @@ struct AllDefault<T>(#[rusqlite(read_default)] PhantomData<T>);
 #[rusqlite(from = "unit_records")]
 struct UnitRecord;
 
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "brace_records")]
+struct BraceRecord {
+    #[rusqlite(select = "'{}'")]
+    value: String,
+}
+
 fn records_connection() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -341,6 +348,28 @@ fn unit_structs_produce_one_value_per_row() {
     assert_eq!(
         UnitRecord::fetch(&conn).unwrap(),
         vec![UnitRecord, UnitRecord]
+    );
+}
+
+#[test]
+fn configured_sql_braces_are_not_treated_as_format_placeholders() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE brace_records (id INTEGER NOT NULL);
+         INSERT INTO brace_records VALUES (1), (2);",
+    )
+    .unwrap();
+
+    assert_eq!(
+        BraceRecord::fetch(&conn).unwrap(),
+        vec![
+            BraceRecord { value: "{}".into() },
+            BraceRecord { value: "{}".into() },
+        ]
+    );
+    assert_eq!(
+        BraceRecord::fetch_with_filter(&conn, "id = ?1", rusqlite::params![2_i64]).unwrap(),
+        vec![BraceRecord { value: "{}".into() }]
     );
 }
 
