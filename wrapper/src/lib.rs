@@ -1,4 +1,4 @@
-//! Derive-based row and table mapping for [rusqlite](https://docs.rs/rusqlite).
+//! Derive-based row mapping and record writing for [rusqlite](https://docs.rs/rusqlite).
 //!
 //! [`RusqliteFetch`] maps query rows into structs. [`RusqliteWrite`] generates
 //! inserts, key-based updates, and SQLite upserts for complete table-backed
@@ -139,9 +139,9 @@ where
 /// in declaration order and decodes them with [`rusqlite::Row::get`]. A field
 /// marked `#[rusqlite(read_default)]` is omitted from the query and initialized
 /// with [`Default::default`]. A field marked `#[rusqlite(aggregate)]` collects
-/// its selected value across rows that have equal non-aggregated fields. Such a
-/// field must implement `FromIterator`; `aggregate(item = Type)` specifies an item
-/// type when it cannot be inferred.
+/// its selected value across rows whose non-aggregated fields are equal. The
+/// field must implement [`FromIterator`]; use
+/// `#[rusqlite(aggregate(item = Type))]` when Rust cannot infer its item type.
 ///
 /// Use rusqlite directly for custom result handling or incremental row
 /// processing.
