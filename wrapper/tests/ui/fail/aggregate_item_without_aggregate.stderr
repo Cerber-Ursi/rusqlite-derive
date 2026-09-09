@@ -1,0 +1,6 @@
+error: `item` requires `aggregate`
+ --> tests/ui/fail/aggregate_item_without_aggregate.rs:5:5
+  |
+5 | /     #[rusqlite(item = String)]
+6 | |     value: Vec<String>,
+  | |______________________^

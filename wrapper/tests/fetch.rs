@@ -1,5 +1,8 @@
 use rusqlite_derive::{RusqliteFetch, rusqlite::Connection};
-use std::marker::PhantomData;
+use std::{
+    collections::{BTreeSet, VecDeque},
+    marker::PhantomData,
+};
 
 #[derive(Debug, PartialEq, RusqliteFetch)]
 struct DefaultRecord {
@@ -75,6 +78,41 @@ struct UnitRecord;
 struct BraceRecord {
     #[rusqlite(select = "'{}'")]
     value: String,
+}
+
+#[derive(Debug, PartialEq)]
+struct Sum(i64);
+
+impl FromIterator<i64> for Sum {
+    fn from_iter<T: IntoIterator<Item = i64>>(iter: T) -> Self {
+        Self(iter.into_iter().sum())
+    }
+}
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "parents AS p JOIN children AS c ON c.parent_id = p.id")]
+struct ParentWithChildren {
+    #[rusqlite(select = "p.id")]
+    id: i64,
+    #[rusqlite(select = "p.name")]
+    name: String,
+    #[rusqlite(select = "c.value", aggregate)]
+    children: Vec<String>,
+    #[rusqlite(select = "c.value", aggregate)]
+    unique_children: BTreeSet<String>,
+    #[rusqlite(select = "c.value", aggregate)]
+    queued_children: VecDeque<String>,
+    #[rusqlite(select = "c.parent_id", aggregate)]
+    child_id_sum: Sum,
+}
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "parents AS p JOIN children AS c ON c.parent_id = p.id")]
+struct GenericParent<C> {
+    #[rusqlite(select = "p.id")]
+    id: i64,
+    #[rusqlite(select = "c.value", aggregate(item = String))]
+    children: C,
 }
 
 fn records_connection() -> Connection {
@@ -369,6 +407,57 @@ fn configured_sql_braces_are_not_treated_as_format_placeholders() {
     assert_eq!(
         BraceRecord::fetch_with_filter(&conn, "id = ?1", rusqlite::params![2_i64]).unwrap(),
         vec![BraceRecord { value: "{}".into() }]
+    );
+}
+
+#[test]
+fn aggregate_fields_combine_rows_by_non_aggregated_values() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE children (parent_id INTEGER NOT NULL, value TEXT NOT NULL);
+         INSERT INTO parents VALUES (1, 'first'), (2, 'second');
+         INSERT INTO children VALUES
+             (1, 'beta'), (2, 'only'), (1, 'alpha'), (1, 'alpha');",
+    )
+    .unwrap();
+
+    let records = ParentWithChildren::fetch_with_filter(
+        &conn,
+        "p.id >= ?1 ORDER BY p.id, c.rowid",
+        rusqlite::params![1_i64],
+    )
+    .unwrap();
+
+    assert_eq!(
+        records,
+        vec![
+            ParentWithChildren {
+                id: 1,
+                name: "first".into(),
+                children: vec!["beta".into(), "alpha".into(), "alpha".into()],
+                unique_children: BTreeSet::from(["alpha".into(), "beta".into()]),
+                queued_children: VecDeque::from(["beta".into(), "alpha".into(), "alpha".into()]),
+                child_id_sum: Sum(3),
+            },
+            ParentWithChildren {
+                id: 2,
+                name: "second".into(),
+                children: vec!["only".into()],
+                unique_children: BTreeSet::from(["only".into()]),
+                queued_children: VecDeque::from(["only".into()]),
+                child_id_sum: Sum(2),
+            },
+        ]
+    );
+
+    assert_eq!(
+        GenericParent::<Vec<String>>::fetch_with_filter(&conn, "p.id = 1 ORDER BY c.rowid", [],)
+            .unwrap(),
+        vec![GenericParent {
+            id: 1,
+            children: vec!["beta".into(), "alpha".into(), "alpha".into()],
+        }]
     );
 }
 

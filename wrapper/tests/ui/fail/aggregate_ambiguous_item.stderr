@@ -1,0 +1,23 @@
+error[E0283]: type annotations needed
+  --> tests/ui/fail/aggregate_ambiguous_item.rs:21:13
+   |
+21 |     values: Ambiguous,
+   |             ^^^^^^^^^ cannot infer type
+   |
+note: multiple `impl`s satisfying `Ambiguous: FromIterator<_>` found
+  --> tests/ui/fail/aggregate_ambiguous_item.rs:5:1
+   |
+ 5 | impl FromIterator<i64> for Ambiguous {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+11 | impl FromIterator<String> for Ambiguous {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for `Ambiguous` to implement `rusqlite_derive::__Aggregate<_>`
+note: required by a bound in `rusqlite_derive::__private_collect_aggregate_or_use_item_attribute`
+  --> src/lib.rs
+   |
+   | pub fn __private_collect_aggregate_or_use_item_attribute<C, T>(
+   |        ------------------------------------------------- required by a bound in this function
+...
+   |     C: __Aggregate<T>,
+   |        ^^^^^^^^^^^^^^ required by this bound in `__private_collect_aggregate_or_use_item_attribute`

@@ -92,20 +92,23 @@ Struct attributes:
 |------------------------------|-----------------|--------------------------------------------------------------------------------|
 | `#[rusqlite(table = "...")]` | Both derives    | Names the writable table and default read source. Required by `RusqliteWrite`. |
 | `#[rusqlite(from = "...")]`  | `RusqliteFetch` | Replaces the complete read `FROM` fragment.                                    |
+| `#[rusqlite(crate = "...")]` | Both derives    | Sets the wrapper crate path when the dependency has been renamed.              |
 
 The read source is chosen in this order: `from`, `table`, then the Rust struct name. The write target is always `table`; it is never inferred from `from`, which may contain a join or subquery.
 
 Field attributes:
 
-| Attribute                     | Effect                                                                  |
-|-------------------------------|-------------------------------------------------------------------------|
-| `#[rusqlite(column = "...")]` | Sets the column used for writes and as the default read expression.     |
-| `#[rusqlite(select = "...")]` | Overrides the read expression.                                          |
-| `#[rusqlite(read_default)]`   | Omits the field from reads and uses `Default::default()`.               |
-| `#[rusqlite(key)]`            | Includes the field in update predicates and the upsert conflict target. |
-| `#[rusqlite(skip_insert)]`    | Omits the field from inserts and the insert path of upserts.            |
-| `#[rusqlite(skip_update)]`    | Omits a non-key field from update assignments.                          |
-| `#[rusqlite(skip_write)]`     | Excludes a field from all write operations.                             |
+| Attribute                                | Effect                                                                  |
+|------------------------------------------|-------------------------------------------------------------------------|
+| `#[rusqlite(column = "...")]`            | Sets the column used for writes and as the default read expression.     |
+| `#[rusqlite(select = "...")]`            | Overrides the read expression.                                          |
+| `#[rusqlite(read_default)]`              | Omits the field from reads and uses `Default::default()`.               |
+| `#[rusqlite(aggregate)]`                 | Collects one selected value per row while grouping equal records.       |
+| `#[rusqlite(aggregate(item = Type))]`    | Specifies the aggregate item type when Rust cannot infer it.            |
+| `#[rusqlite(key)]`                       | Includes the field in update predicates and the upsert conflict target. |
+| `#[rusqlite(skip_insert)]`               | Omits the field from inserts and the insert path of upserts.            |
+| `#[rusqlite(skip_update)]`               | Omits a non-key field from update assignments.                          |
+| `#[rusqlite(skip_write)]`                | Excludes a field from all write operations.                             |
 
 For an ordinary named field, the Rust field name is the default read expression and writable column. `column` can rename both; `select` can independently override the read expression:
 
@@ -157,6 +160,40 @@ struct UserWithTeam {
     team_name: String,
 }
 ```
+
+### Aggregated fields
+
+Mark a collection field with `aggregate` to combine one-to-many query rows into records:
+
+```rust
+use std::collections::BTreeSet;
+
+#[derive(RusqliteFetch)]
+#[rusqlite(from = "users AS u JOIN user_tags AS t ON t.user_id = u.id")]
+struct UserTags {
+    #[rusqlite(select = "u.id")]
+    user_id: i64,
+    #[rusqlite(select = "t.tag", aggregate)]
+    tags: BTreeSet<String>,
+}
+```
+
+Each SQL row contributes one selected value to every aggregated field. Rows are combined when all their selected, non-aggregated fields compare equal, so those field types must implement `PartialEq`. If there are no such fields, all rows form one record. Fields marked `read_default` do not participate in the comparison.
+
+The collection controls ordering and deduplication. For example, `Vec<T>` preserves SQL row order and duplicates, while `BTreeSet<T>` sorts and deduplicates. Use an `ORDER BY` clause when vector order matters.
+
+The field type only needs to implement `FromIterator<T>` for an item type `T` that implements `FromSql`. Standard collections such as `Vec`, `VecDeque`, `LinkedList`, `BTreeSet`, and `HashSet` work directly, as do custom accumulators that consume values without storing or yielding them. For nullable values from a `LEFT JOIN`, use a collection such as `Vec<Option<T>>`; aggregation does not implicitly discard `NULL`.
+
+The macro asks Rust to infer `T` from the field type. Specify it explicitly when the field type is generic or has multiple applicable `FromIterator` implementations:
+
+```rust
+#[rusqlite(select = "t.value", aggregate(item = i64))]
+total: Accumulator,
+```
+
+For this example, the generated implementation requires `Accumulator: FromIterator<i64>` and `i64: FromSql`.
+
+Aggregation happens in memory after executing the ordinary generated `SELECT`; it does not add a SQL `GROUP BY`. The result groups preserve the order in which their first rows occur. On a struct that also derives `RusqliteWrite`, an aggregated projection normally needs `skip_write` because the collection itself is not a writable SQLite value.
 
 ### Filtering safely
 
@@ -242,7 +279,9 @@ local_state: LocalState,
 
 Generic parameters and existing `where` clauses are preserved. The derives add bounds for generic-dependent fields:
 
-- `FromSql` for selected fields;
+- `FromSql` for ordinary selected fields and aggregate item types;
+- `FromIterator` for aggregated fields;
+- `PartialEq` for non-aggregated fields used to group rows;
 - `Default` for `read_default` fields;
 - `ToSql` for writable fields.
 
@@ -250,7 +289,7 @@ Generic parameters and existing `where` clauses are preserved. The derives add b
 
 ## Limitations
 
-- Fetch helpers collect all matching rows into a `Vec`.
+- Fetch helpers materialize all matching SQL rows; aggregated fields are grouped in memory.
 - Writes operate on complete records; there are no partial updates or batches.
 - There is no `RETURNING` helper or automatic hydration of generated values.
 - Deletes, migrations, relationships, optimistic locking, and schema management remain the application's responsibility.
