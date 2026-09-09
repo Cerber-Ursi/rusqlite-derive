@@ -195,6 +195,228 @@ fn flatten_aggregate_options(tokens: proc_macro2::TokenStream) -> proc_macro2::T
     flattened
 }
 
+#[derive(Clone, Copy)]
+enum StructKind {
+    Named,
+    Unnamed,
+    Unit,
+}
+
+struct FetchMapping {
+    columns: Vec<String>,
+    row_value: proc_macro2::TokenStream,
+    grouped_value: proc_macro2::TokenStream,
+    identity_fields: Vec<(syn::Index, syn::Type)>,
+    aggregate_fields: Vec<syn::Index>,
+    row_values: Vec<proc_macro2::TokenStream>,
+    group_types: Vec<proc_macro2::TokenStream>,
+    new_group_values: Vec<proc_macro2::TokenStream>,
+}
+
+struct FetchField {
+    name: Option<syn::Ident>,
+    row_value: proc_macro2::TokenStream,
+    grouped_value: proc_macro2::TokenStream,
+}
+
+struct FetchMappingBuilder<'a> {
+    generics: &'a mut syn::Generics,
+    crate_path: &'a syn::Path,
+    columns: Vec<String>,
+    fields: Vec<FetchField>,
+    identity_fields: Vec<(syn::Index, syn::Type)>,
+    aggregate_fields: Vec<syn::Index>,
+    row_values: Vec<proc_macro2::TokenStream>,
+    group_types: Vec<proc_macro2::TokenStream>,
+    new_group_values: Vec<proc_macro2::TokenStream>,
+}
+
+impl<'a> FetchMappingBuilder<'a> {
+    fn new(generics: &'a mut syn::Generics, crate_path: &'a syn::Path) -> Self {
+        Self {
+            generics,
+            crate_path,
+            columns: Vec::new(),
+            fields: Vec::new(),
+            identity_fields: Vec::new(),
+            aggregate_fields: Vec::new(),
+            row_values: Vec::new(),
+            group_types: Vec::new(),
+            new_group_values: Vec::new(),
+        }
+    }
+
+    fn add_field(&mut self, field: syn::Field, name: Option<syn::Ident>) -> syn::Result<()> {
+        let attr = field_attributes(&field.attrs)?;
+        if attr.item.is_some() && !attr.aggregate {
+            return Err(syn::Error::new_spanned(
+                &field,
+                "`item` requires `aggregate`",
+            ));
+        }
+
+        let ty = field.ty.clone();
+        if attr.read_default {
+            add_field_bound(self.generics, &ty, quote::quote!(::core::default::Default));
+            let value = quote::quote_spanned! { ty.span() =>
+                ::core::default::Default::default()
+            };
+            self.fields.push(FetchField {
+                name,
+                row_value: value.clone(),
+                grouped_value: value,
+            });
+            return Ok(());
+        }
+
+        let column = attr
+            .select
+            .or(attr.column)
+            .or_else(|| name.as_ref().map(|name| name.unraw().to_string()))
+            .ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &field,
+                    "tuple struct fields require #[rusqlite(select = \"...\")], #[rusqlite(column = \"...\")], or #[rusqlite(read_default)]",
+                )
+            })?;
+        let column_index = self.columns.len();
+        let group_index = syn::Index::from(self.row_values.len());
+        self.columns.push(column);
+
+        let crate_path = self.crate_path;
+        let (row_value, grouped_value) = if attr.aggregate {
+            let item = aggregate_item_type(self.generics, &ty, attr.item, crate_path);
+            self.row_values.push(quote::quote! {
+                row.get::<_, #crate_path::rusqlite::types::Value>(#column_index)?
+            });
+            self.group_types.push(quote::quote! {
+                ::std::vec::Vec<#crate_path::rusqlite::types::Value>
+            });
+            self.new_group_values.push(quote::quote! {
+                ::std::vec![value.#group_index]
+            });
+            self.aggregate_fields.push(group_index.clone());
+            let value = quote::quote_spanned! { ty.span() =>
+                #crate_path::__private_collect_aggregate_or_use_item_attribute::<#ty, #item>(
+                    group.#group_index,
+                    #column_index,
+                    &aggregate_column_names[#column_index],
+                )?
+            };
+            (value.clone(), value)
+        } else {
+            add_field_bound(
+                self.generics,
+                &ty,
+                quote::quote!(#crate_path::rusqlite::types::FromSql),
+            );
+            let value = quote::quote_spanned! { ty.span() =>
+                row.get::<_, #ty>(#column_index)?
+            };
+            self.row_values.push(value.clone());
+            self.group_types.push(quote::quote! { #ty });
+            self.new_group_values
+                .push(quote::quote! { value.#group_index });
+            self.identity_fields.push((group_index.clone(), ty));
+            (value, quote::quote! { group.#group_index })
+        };
+        self.fields.push(FetchField {
+            name,
+            row_value,
+            grouped_value,
+        });
+        Ok(())
+    }
+
+    fn finish(self, name: &syn::Ident, kind: StructKind) -> FetchMapping {
+        let row_values = self.fields.iter().map(|field| &field.row_value);
+        let grouped_values = self.fields.iter().map(|field| &field.grouped_value);
+        let row_value = construct_struct(name, kind, &self.fields, row_values);
+        let grouped_value = construct_struct(name, kind, &self.fields, grouped_values);
+
+        FetchMapping {
+            columns: self.columns,
+            row_value,
+            grouped_value,
+            identity_fields: self.identity_fields,
+            aggregate_fields: self.aggregate_fields,
+            row_values: self.row_values,
+            group_types: self.group_types,
+            new_group_values: self.new_group_values,
+        }
+    }
+}
+
+fn aggregate_item_type(
+    generics: &mut syn::Generics,
+    collection: &syn::Type,
+    item: Option<syn::Type>,
+    crate_path: &syn::Path,
+) -> proc_macro2::TokenStream {
+    let Some(item) = item else {
+        return quote::quote!(_);
+    };
+
+    add_field_bound(
+        generics,
+        collection,
+        quote::quote!(::core::iter::FromIterator<#item>),
+    );
+    add_field_bound(
+        generics,
+        &item,
+        quote::quote!(#crate_path::rusqlite::types::FromSql),
+    );
+    quote::quote!(#item)
+}
+
+fn construct_struct<'a>(
+    name: &syn::Ident,
+    kind: StructKind,
+    fields: &[FetchField],
+    values: impl Iterator<Item = &'a proc_macro2::TokenStream>,
+) -> proc_macro2::TokenStream {
+    match kind {
+        StructKind::Named => {
+            let names = fields
+                .iter()
+                .map(|field| field.name.as_ref().expect("named struct fields have names"));
+            quote::quote! { #name { #(#names: #values,)* } }
+        }
+        StructKind::Unnamed => quote::quote! { #name(#(#values,)*) },
+        StructKind::Unit => quote::quote! { #name },
+    }
+}
+
+fn build_fetch_mapping(
+    fields: syn::Fields,
+    name: &syn::Ident,
+    generics: &mut syn::Generics,
+    crate_path: &syn::Path,
+) -> syn::Result<FetchMapping> {
+    let mut builder = FetchMappingBuilder::new(generics, crate_path);
+    let kind = match fields {
+        syn::Fields::Named(fields) => {
+            for field in fields.named {
+                let field_name = field
+                    .ident
+                    .clone()
+                    .expect("fields were checked to be named");
+                builder.add_field(field, Some(field_name))?;
+            }
+            StructKind::Named
+        }
+        syn::Fields::Unnamed(fields) => {
+            for field in fields.unnamed {
+                builder.add_field(field, None)?;
+            }
+            StructKind::Unnamed
+        }
+        syn::Fields::Unit => StructKind::Unit,
+    };
+    Ok(builder.finish(name, kind))
+}
+
 fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let syn::Data::Struct(data) = input.data else {
         return Err(syn::Error::new_spanned(
@@ -215,202 +437,16 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .crate_path
         .unwrap_or_else(|| syn::parse_quote!(::rusqlite_derive));
 
-    let mut identity_fields = Vec::new();
-    let mut aggregate_fields = Vec::new();
-    let mut row_values = Vec::new();
-    let mut group_types = Vec::new();
-    let mut new_group_values = Vec::new();
-    let (columns, row_value, grouped_value) = match data.fields {
-        syn::Fields::Named(fields) => {
-            let mut columns = vec![];
-            let mut values = vec![];
-            let mut grouped_values = vec![];
-
-            for field in fields.named {
-                let field_name = field
-                    .ident
-                    .as_ref()
-                    .expect("fields were checked to be named");
-                let attr = field_attributes(&field.attrs)?;
-                let ty = &field.ty;
-                if attr.item.is_some() && !attr.aggregate {
-                    return Err(syn::Error::new_spanned(
-                        &field,
-                        "`item` requires `aggregate`",
-                    ));
-                }
-
-                if attr.read_default {
-                    add_field_bound(&mut generics, ty, quote::quote!(::core::default::Default));
-                    let value = quote::quote_spanned! { ty.span() =>
-                        ::core::default::Default::default()
-                    };
-                    values.push(quote::quote! { #field_name: #value, });
-                    grouped_values.push(quote::quote! { #field_name: #value, });
-                } else {
-                    let index = columns.len();
-                    let group_index = syn::Index::from(row_values.len());
-                    let column = attr
-                        .select
-                        .or(attr.column)
-                        .unwrap_or_else(|| field_name.unraw().to_string());
-                    columns.push(column);
-
-                    if attr.aggregate {
-                        let item = if let Some(item) = attr.item {
-                            add_field_bound(
-                                &mut generics,
-                                ty,
-                                quote::quote!(::core::iter::FromIterator<#item>),
-                            );
-                            add_field_bound(
-                                &mut generics,
-                                &item,
-                                quote::quote!(#crate_path::rusqlite::types::FromSql),
-                            );
-                            quote::quote!(#item)
-                        } else {
-                            quote::quote!(_)
-                        };
-                        row_values.push(quote::quote! {
-                            row.get::<_, #crate_path::rusqlite::types::Value>(#index)?
-                        });
-                        group_types.push(quote::quote! {
-                            ::std::vec::Vec<#crate_path::rusqlite::types::Value>
-                        });
-                        new_group_values.push(quote::quote! {
-                            ::std::vec![value.#group_index]
-                        });
-                        let value = quote::quote_spanned! { ty.span() =>
-                            #crate_path::__private_collect_aggregate_or_use_item_attribute::<#ty, #item>(
-                                group.#group_index,
-                                #index,
-                                &aggregate_column_names[#index],
-                            )?
-                        };
-                        values.push(quote::quote! { #field_name: #value, });
-                        grouped_values.push(quote::quote! { #field_name: #value, });
-                        aggregate_fields.push(group_index);
-                    } else {
-                        add_field_bound(
-                            &mut generics,
-                            ty,
-                            quote::quote!(#crate_path::rusqlite::types::FromSql),
-                        );
-                        let value = quote::quote_spanned! { ty.span() =>
-                            row.get::<_, #ty>(#index)?
-                        };
-                        values.push(quote::quote! { #field_name: #value, });
-                        row_values.push(value.clone());
-                        group_types.push(quote::quote! { #ty });
-                        new_group_values.push(quote::quote! { value.#group_index });
-                        grouped_values.push(quote::quote! { #field_name: group.#group_index, });
-                        identity_fields.push((group_index, field.ty));
-                    }
-                }
-            }
-
-            (
-                columns,
-                quote::quote! { #name { #(#values)* } },
-                quote::quote! { #name { #(#grouped_values)* } },
-            )
-        }
-        syn::Fields::Unnamed(fields) => {
-            let mut columns = vec![];
-            let mut values = vec![];
-            let mut grouped_values = vec![];
-
-            for field in fields.unnamed {
-                let attr = field_attributes(&field.attrs)?;
-                let ty = &field.ty;
-                if attr.item.is_some() && !attr.aggregate {
-                    return Err(syn::Error::new_spanned(
-                        &field,
-                        "`item` requires `aggregate`",
-                    ));
-                }
-
-                if attr.read_default {
-                    add_field_bound(&mut generics, ty, quote::quote!(::core::default::Default));
-                    let value = quote::quote_spanned! { ty.span() =>
-                        ::core::default::Default::default(),
-                    };
-                    values.push(value.clone());
-                    grouped_values.push(value);
-                } else {
-                    let column = attr.select.or(attr.column).ok_or_else(|| {
-                        syn::Error::new_spanned(
-                            &field,
-                            "tuple struct fields require #[rusqlite(select = \"...\")], #[rusqlite(column = \"...\")], or #[rusqlite(read_default)]",
-                        )
-                    })?;
-                    let index = columns.len();
-                    let group_index = syn::Index::from(row_values.len());
-                    columns.push(column);
-
-                    if attr.aggregate {
-                        let item = if let Some(item) = attr.item {
-                            add_field_bound(
-                                &mut generics,
-                                ty,
-                                quote::quote!(::core::iter::FromIterator<#item>),
-                            );
-                            add_field_bound(
-                                &mut generics,
-                                &item,
-                                quote::quote!(#crate_path::rusqlite::types::FromSql),
-                            );
-                            quote::quote!(#item)
-                        } else {
-                            quote::quote!(_)
-                        };
-                        row_values.push(quote::quote! {
-                            row.get::<_, #crate_path::rusqlite::types::Value>(#index)?
-                        });
-                        group_types.push(quote::quote! {
-                            ::std::vec::Vec<#crate_path::rusqlite::types::Value>
-                        });
-                        new_group_values.push(quote::quote! {
-                            ::std::vec![value.#group_index]
-                        });
-                        let value = quote::quote_spanned! { ty.span() =>
-                            #crate_path::__private_collect_aggregate_or_use_item_attribute::<#ty, #item>(
-                                group.#group_index,
-                                #index,
-                                &aggregate_column_names[#index],
-                            )?,
-                        };
-                        values.push(value.clone());
-                        grouped_values.push(value);
-                        aggregate_fields.push(group_index);
-                    } else {
-                        add_field_bound(
-                            &mut generics,
-                            ty,
-                            quote::quote!(#crate_path::rusqlite::types::FromSql),
-                        );
-                        let value = quote::quote_spanned! { ty.span() =>
-                            row.get::<_, #ty>(#index)?
-                        };
-                        values.push(quote::quote! { #value, });
-                        row_values.push(value);
-                        group_types.push(quote::quote! { #ty });
-                        new_group_values.push(quote::quote! { value.#group_index });
-                        grouped_values.push(quote::quote! { group.#group_index, });
-                        identity_fields.push((group_index, field.ty));
-                    }
-                }
-            }
-
-            (
-                columns,
-                quote::quote! { #name(#(#values)*) },
-                quote::quote! { #name(#(#grouped_values)*) },
-            )
-        }
-        syn::Fields::Unit => (vec![], quote::quote! { #name }, quote::quote! { #name }),
-    };
+    let FetchMapping {
+        columns,
+        row_value,
+        grouped_value,
+        identity_fields,
+        aggregate_fields,
+        row_values,
+        group_types,
+        new_group_values,
+    } = build_fetch_mapping(data.fields, &name, &mut generics, &crate_path)?;
 
     // SQLite still needs a result expression when every field is defaulted.
     // Selecting a constant preserves one constructed value per source row.
@@ -423,15 +459,11 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let query_with_where = format!("SELECT {select} FROM {source} WHERE ");
 
     let aggregate = !aggregate_fields.is_empty();
-    if aggregate {
+    let (prepare_rows, collect_rows) = if aggregate {
         for (_, ty) in &identity_fields {
             add_field_bound(&mut generics, ty, quote::quote!(::core::cmp::PartialEq));
         }
-    }
 
-    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
-
-    if aggregate {
         let comparisons = identity_fields.iter().map(|(index, _)| {
             quote::quote! {
                 ::core::cmp::PartialEq::eq(&existing.#index, &value.#index)
@@ -445,88 +477,71 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 existing.#index.push(value.#index);
             }
         });
-        let merge: Vec<_> = merge.collect();
-        let collect_rows = quote::quote! {
-            let mut values: ::std::vec::Vec<(#(#group_types,)*)> =
-                ::std::vec::Vec::new();
-            while let Some(row) = rows.next()? {
-                let value = (#(#row_values,)*);
-                if let Some(existing) = values.iter_mut().find(|existing| #equality) {
-                    #(#merge)*
-                } else {
-                    values.push((#(#new_group_values,)*));
+        (
+            quote::quote! {
+                let aggregate_column_names: Vec<::std::string::String> = statement
+                    .column_names()
+                    .into_iter()
+                    .map(::std::borrow::ToOwned::to_owned)
+                    .collect();
+            },
+            quote::quote! {
+                let mut values: ::std::vec::Vec<(#(#group_types,)*)> =
+                    ::std::vec::Vec::new();
+                while let Some(row) = rows.next()? {
+                    let value = (#(#row_values,)*);
+                    if let Some(existing) = values.iter_mut().find(|existing| #equality) {
+                        #(#merge)*
+                    } else {
+                        values.push((#(#new_group_values,)*));
+                    }
                 }
-            }
-            values
-                .into_iter()
-                .map(|group| -> #crate_path::rusqlite::Result<Self> {
-                    Ok(#grouped_value)
-                })
-                .collect()
-        };
-
-        Ok(quote::quote! {
-            impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
-                fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
-                    let mut statement = conn.prepare(#query_simple)?;
-                    let aggregate_column_names: Vec<::std::string::String> = statement
-                        .column_names()
-                        .into_iter()
-                        .map(::std::borrow::ToOwned::to_owned)
-                        .collect();
-                    let mut rows = statement.query([])?;
-                    #collect_rows
-                }
-
-                fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
-                    conn: &#crate_path::rusqlite::Connection,
-                    filter: &str,
-                    params: P,
-                ) -> #crate_path::rusqlite::Result<Vec<Self>> {
-                    let mut query = ::std::string::String::from(#query_with_where);
-                    query.push_str(filter);
-                    query.push(';');
-                    let mut statement = conn.prepare(&query)?;
-                    let aggregate_column_names: Vec<::std::string::String> = statement
-                        .column_names()
-                        .into_iter()
-                        .map(::std::borrow::ToOwned::to_owned)
-                        .collect();
-                    let mut rows = statement.query(params)?;
-                    #collect_rows
-                }
-            }
-        })
+                values
+                    .into_iter()
+                    .map(|group| -> #crate_path::rusqlite::Result<Self> {
+                        Ok(#grouped_value)
+                    })
+                    .collect()
+            },
+        )
     } else {
-        Ok(quote::quote! {
-            impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
-                fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
-                    conn
-                        .prepare(#query_simple)?
-                        .query_map([], |row| {
-                            Ok(#row_value)
-                        })?
-                        .collect()
+        (
+            proc_macro2::TokenStream::new(),
+            quote::quote! {
+                let mut values = ::std::vec::Vec::new();
+                while let Some(row) = rows.next()? {
+                    values.push(#row_value);
                 }
+                Ok(values)
+            },
+        )
+    };
 
-                fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
-                    conn: &#crate_path::rusqlite::Connection,
-                    filter: &str,
-                    params: P,
-                ) -> #crate_path::rusqlite::Result<Vec<Self>> {
-                    let mut query = ::std::string::String::from(#query_with_where);
-                    query.push_str(filter);
-                    query.push(';');
-                    conn
-                        .prepare(&query)?
-                        .query_map(params, |row| {
-                            Ok(#row_value)
-                        })?
-                        .collect()
-                }
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+    Ok(quote::quote! {
+        impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
+            fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
+                let mut statement = conn.prepare(#query_simple)?;
+                #prepare_rows
+                let mut rows = statement.query([])?;
+                #collect_rows
             }
-        })
-    }
+
+            fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
+                conn: &#crate_path::rusqlite::Connection,
+                filter: &str,
+                params: P,
+            ) -> #crate_path::rusqlite::Result<Vec<Self>> {
+                let mut query = ::std::string::String::from(#query_with_where);
+                query.push_str(filter);
+                query.push(';');
+                let mut statement = conn.prepare(&query)?;
+                #prepare_rows
+                let mut rows = statement.query(params)?;
+                #collect_rows
+            }
+        }
+    })
 }
 
 struct WriteField {
@@ -537,6 +552,83 @@ struct WriteField {
     skip_insert: bool,
     skip_update: bool,
     span: proc_macro2::Span,
+}
+
+fn collect_write_fields(fields: syn::Fields) -> syn::Result<Vec<WriteField>> {
+    let mut write_fields = Vec::new();
+    match fields {
+        syn::Fields::Named(fields) => {
+            for field in fields.named {
+                let name = field
+                    .ident
+                    .clone()
+                    .expect("fields were checked to be named");
+                let column = name.unraw().to_string();
+                if let Some(field) = write_field(field, syn::Member::Named(name), Some(column))? {
+                    write_fields.push(field);
+                }
+            }
+        }
+        syn::Fields::Unnamed(fields) => {
+            for (index, field) in fields.unnamed.into_iter().enumerate() {
+                if let Some(field) =
+                    write_field(field, syn::Member::Unnamed(syn::Index::from(index)), None)?
+                {
+                    write_fields.push(field);
+                }
+            }
+        }
+        syn::Fields::Unit => {}
+    }
+    Ok(write_fields)
+}
+
+fn write_field(
+    field: syn::Field,
+    member: syn::Member,
+    implicit_column: Option<String>,
+) -> syn::Result<Option<WriteField>> {
+    let attr = field_attributes(&field.attrs)?;
+    validate_skip_combination(&field, &attr)?;
+    if attr.skip_write {
+        return Ok(None);
+    }
+
+    let column = if let Some(column) = attr.column {
+        column
+    } else if let Some(implicit_column) = implicit_column {
+        if attr.select.is_none() {
+            implicit_column
+        } else if attr.key {
+            return Err(syn::Error::new_spanned(
+                &field,
+                "key field has no writable column; add #[rusqlite(column = \"...\")]",
+            ));
+        } else {
+            return Err(syn::Error::new_spanned(
+                &field,
+                "field has a read expression but no writable column; add #[rusqlite(column = \"...\")] or #[rusqlite(skip_write)]",
+            ));
+        }
+    } else {
+        let message = if attr.key {
+            "key tuple field has no writable column; add #[rusqlite(column = \"...\")]"
+        } else {
+            "tuple field has no writable column; add #[rusqlite(column = \"...\")] or #[rusqlite(skip_write)]"
+        };
+        return Err(syn::Error::new_spanned(&field, message));
+    };
+
+    let span = field.span();
+    Ok(Some(WriteField {
+        member,
+        ty: field.ty,
+        column,
+        key: attr.key,
+        skip_insert: attr.skip_insert,
+        skip_update: attr.skip_update,
+        span,
+    }))
 }
 
 fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -557,82 +649,7 @@ fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .crate_path
         .unwrap_or_else(|| syn::parse_quote!(::rusqlite_derive));
 
-    let mut write_fields = Vec::new();
-    match data.fields {
-        syn::Fields::Named(fields) => {
-            for field in fields.named {
-                let field_name = field
-                    .ident
-                    .clone()
-                    .expect("fields were checked to be named");
-                let attr = field_attributes(&field.attrs)?;
-                validate_skip_combination(&field, &attr)?;
-
-                if attr.skip_write {
-                    continue;
-                }
-
-                let column = match attr.column {
-                    Some(column) => column,
-                    None if attr.select.is_none() => field_name.unraw().to_string(),
-                    None if attr.key => {
-                        return Err(syn::Error::new_spanned(
-                            &field,
-                            "key field has no writable column; add #[rusqlite(column = \"...\")]",
-                        ));
-                    }
-                    None => {
-                        return Err(syn::Error::new_spanned(
-                            &field,
-                            "field has a read expression but no writable column; add #[rusqlite(column = \"...\")] or #[rusqlite(skip_write)]",
-                        ));
-                    }
-                };
-
-                let span = field.span();
-                write_fields.push(WriteField {
-                    member: syn::Member::Named(field_name),
-                    ty: field.ty,
-                    column,
-                    key: attr.key,
-                    skip_insert: attr.skip_insert,
-                    skip_update: attr.skip_update,
-                    span,
-                });
-            }
-        }
-        syn::Fields::Unnamed(fields) => {
-            for (index, field) in fields.unnamed.into_iter().enumerate() {
-                let attr = field_attributes(&field.attrs)?;
-                validate_skip_combination(&field, &attr)?;
-
-                if attr.skip_write {
-                    continue;
-                }
-
-                let column = attr.column.ok_or_else(|| {
-                    let message = if attr.key {
-                        "key tuple field has no writable column; add #[rusqlite(column = \"...\")]"
-                    } else {
-                        "tuple field has no writable column; add #[rusqlite(column = \"...\")] or #[rusqlite(skip_write)]"
-                    };
-                    syn::Error::new_spanned(&field, message)
-                })?;
-
-                let span = field.span();
-                write_fields.push(WriteField {
-                    member: syn::Member::Unnamed(syn::Index::from(index)),
-                    ty: field.ty,
-                    column,
-                    key: attr.key,
-                    skip_insert: attr.skip_insert,
-                    skip_update: attr.skip_update,
-                    span,
-                });
-            }
-        }
-        syn::Fields::Unit => {}
-    }
+    let write_fields = collect_write_fields(data.fields)?;
 
     for (index, field) in write_fields.iter().enumerate() {
         if write_fields[..index]
