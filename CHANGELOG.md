@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-09
+
 ### Added
 
 - In-memory aggregation for `RusqliteFetch` fields through `FromIterator`, with optional explicit aggregate item types when inference is ambiguous.
@@ -23,5 +25,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Compile-time diagnostics and runtime coverage for supported mappings and invalid attribute combinations.
 - Explicit declaration of Rust 1.85 as the minimum supported Rust version.
 
-[Unreleased]: https://github.com/Cerber-Ursi/rusqlite-derive/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Cerber-Ursi/rusqlite-derive/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Cerber-Ursi/rusqlite-derive/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Cerber-Ursi/rusqlite-derive/releases/tag/v1.0.0
