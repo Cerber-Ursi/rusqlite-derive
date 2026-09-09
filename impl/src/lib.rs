@@ -12,8 +12,10 @@ use syn::{ext::IdentExt, spanned::Spanned};
 /// used by `RusqliteWrite`. `#[rusqlite(from = "...")]` overrides that source
 /// with a complete `FROM` fragment. Named fields default to their Rust names;
 /// `select` sets a read expression, `column` sets a storage column and default
-/// read expression, and `read_default` omits a field from reads and initializes
-/// it with `Default::default()`.
+/// read expression, `read_default` omits a field from reads and initializes it
+/// with `Default::default()`, and `aggregate` collects a selected value across
+/// rows with equal non-aggregated fields. `aggregate(item = Type)` specifies
+/// the `FromIterator` item type when Rust cannot infer it.
 ///
 /// # Renaming the dependency
 ///
@@ -133,8 +135,11 @@ struct RusqliteField {
     #[attribute(conflicts = [read_default])]
     select: Option<String>,
     column: Option<String>,
-    #[attribute(conflicts = [select])]
+    #[attribute(conflicts = [select, aggregate])]
     read_default: bool,
+    #[attribute(conflicts = [read_default])]
+    aggregate: bool,
+    item: Option<syn::Type>,
     key: bool,
     #[attribute(conflicts = [skip_write])]
     skip_insert: bool,
@@ -142,6 +147,52 @@ struct RusqliteField {
     skip_update: bool,
     #[attribute(conflicts = [skip_insert, skip_update])]
     skip_write: bool,
+}
+
+fn field_attributes(attributes: &[syn::Attribute]) -> syn::Result<RusqliteField> {
+    let attributes: Vec<_> = attributes
+        .iter()
+        .cloned()
+        .map(|mut attribute| {
+            if attribute.path().is_ident("rusqlite") {
+                if let syn::Meta::List(list) = &mut attribute.meta {
+                    list.tokens = flatten_aggregate_options(list.tokens.clone());
+                }
+            }
+            attribute
+        })
+        .collect();
+    RusqliteField::from_attributes(&attributes)
+}
+
+fn flatten_aggregate_options(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let mut tokens = tokens.into_iter().peekable();
+    let mut flattened = proc_macro2::TokenStream::new();
+
+    while let Some(token) = tokens.next() {
+        let aggregate =
+            matches!(&token, proc_macro2::TokenTree::Ident(ident) if ident == "aggregate");
+        flattened.extend(::core::iter::once(token));
+
+        if aggregate {
+            if let Some(proc_macro2::TokenTree::Group(group)) = tokens.peek() {
+                if group.delimiter() == proc_macro2::Delimiter::Parenthesis {
+                    let group = match tokens.next() {
+                        Some(proc_macro2::TokenTree::Group(group)) => group,
+                        _ => unreachable!("peeked token was a group"),
+                    };
+                    if !group.stream().is_empty() {
+                        let mut comma = proc_macro2::Punct::new(',', proc_macro2::Spacing::Alone);
+                        comma.set_span(group.span());
+                        flattened.extend([proc_macro2::TokenTree::Punct(comma)]);
+                        flattened.extend(group.stream());
+                    }
+                }
+            }
+        }
+    }
+
+    flattened
 }
 
 fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -164,18 +215,30 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .crate_path
         .unwrap_or_else(|| syn::parse_quote!(::rusqlite_derive));
 
-    let (columns, row_value) = match data.fields {
+    let mut identity_fields = Vec::new();
+    let mut aggregate_fields = Vec::new();
+    let mut row_values = Vec::new();
+    let mut group_types = Vec::new();
+    let mut new_group_values = Vec::new();
+    let (columns, row_value, grouped_value) = match data.fields {
         syn::Fields::Named(fields) => {
             let mut columns = vec![];
             let mut values = vec![];
+            let mut grouped_values = vec![];
 
             for field in fields.named {
                 let field_name = field
                     .ident
                     .as_ref()
                     .expect("fields were checked to be named");
-                let attr = RusqliteField::from_attributes(&field.attrs)?;
+                let attr = field_attributes(&field.attrs)?;
                 let ty = &field.ty;
+                if attr.item.is_some() && !attr.aggregate {
+                    return Err(syn::Error::new_spanned(
+                        &field,
+                        "`item` requires `aggregate`",
+                    ));
+                }
 
                 if attr.read_default {
                     add_field_bound(&mut generics, ty, quote::quote!(::core::default::Default));
@@ -183,40 +246,98 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                         ::core::default::Default::default()
                     };
                     values.push(quote::quote! { #field_name: #value, });
+                    grouped_values.push(quote::quote! { #field_name: #value, });
                 } else {
                     let index = columns.len();
+                    let group_index = syn::Index::from(row_values.len());
                     let column = attr
                         .select
                         .or(attr.column)
                         .unwrap_or_else(|| field_name.unraw().to_string());
                     columns.push(column);
-                    add_field_bound(
-                        &mut generics,
-                        ty,
-                        quote::quote!(#crate_path::rusqlite::types::FromSql),
-                    );
-                    let value = quote::quote_spanned! { ty.span() =>
-                        row.get::<_, #ty>(#index)?
-                    };
-                    values.push(quote::quote! { #field_name: #value, });
+
+                    if attr.aggregate {
+                        let item = if let Some(item) = attr.item {
+                            add_field_bound(
+                                &mut generics,
+                                ty,
+                                quote::quote!(::core::iter::FromIterator<#item>),
+                            );
+                            add_field_bound(
+                                &mut generics,
+                                &item,
+                                quote::quote!(#crate_path::rusqlite::types::FromSql),
+                            );
+                            quote::quote!(#item)
+                        } else {
+                            quote::quote!(_)
+                        };
+                        row_values.push(quote::quote! {
+                            row.get::<_, #crate_path::rusqlite::types::Value>(#index)?
+                        });
+                        group_types.push(quote::quote! {
+                            ::std::vec::Vec<#crate_path::rusqlite::types::Value>
+                        });
+                        new_group_values.push(quote::quote! {
+                            ::std::vec![value.#group_index]
+                        });
+                        let value = quote::quote_spanned! { ty.span() =>
+                            #crate_path::__private_collect_aggregate_or_use_item_attribute::<#ty, #item>(
+                                group.#group_index,
+                                #index,
+                                &aggregate_column_names[#index],
+                            )?
+                        };
+                        values.push(quote::quote! { #field_name: #value, });
+                        grouped_values.push(quote::quote! { #field_name: #value, });
+                        aggregate_fields.push(group_index);
+                    } else {
+                        add_field_bound(
+                            &mut generics,
+                            ty,
+                            quote::quote!(#crate_path::rusqlite::types::FromSql),
+                        );
+                        let value = quote::quote_spanned! { ty.span() =>
+                            row.get::<_, #ty>(#index)?
+                        };
+                        values.push(quote::quote! { #field_name: #value, });
+                        row_values.push(value.clone());
+                        group_types.push(quote::quote! { #ty });
+                        new_group_values.push(quote::quote! { value.#group_index });
+                        grouped_values.push(quote::quote! { #field_name: group.#group_index, });
+                        identity_fields.push((group_index, field.ty));
+                    }
                 }
             }
 
-            (columns, quote::quote! { #name { #(#values)* } })
+            (
+                columns,
+                quote::quote! { #name { #(#values)* } },
+                quote::quote! { #name { #(#grouped_values)* } },
+            )
         }
         syn::Fields::Unnamed(fields) => {
             let mut columns = vec![];
             let mut values = vec![];
+            let mut grouped_values = vec![];
 
             for field in fields.unnamed {
-                let attr = RusqliteField::from_attributes(&field.attrs)?;
+                let attr = field_attributes(&field.attrs)?;
                 let ty = &field.ty;
+                if attr.item.is_some() && !attr.aggregate {
+                    return Err(syn::Error::new_spanned(
+                        &field,
+                        "`item` requires `aggregate`",
+                    ));
+                }
 
                 if attr.read_default {
                     add_field_bound(&mut generics, ty, quote::quote!(::core::default::Default));
-                    values.push(quote::quote_spanned! { ty.span() =>
+                    let value = quote::quote_spanned! { ty.span() =>
                         ::core::default::Default::default(),
-                    });
+                    };
+                    values.push(value.clone());
+                    grouped_values.push(value);
                 } else {
                     let column = attr.select.or(attr.column).ok_or_else(|| {
                         syn::Error::new_spanned(
@@ -225,21 +346,70 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                         )
                     })?;
                     let index = columns.len();
+                    let group_index = syn::Index::from(row_values.len());
                     columns.push(column);
-                    add_field_bound(
-                        &mut generics,
-                        ty,
-                        quote::quote!(#crate_path::rusqlite::types::FromSql),
-                    );
-                    values.push(quote::quote_spanned! { ty.span() =>
-                        row.get::<_, #ty>(#index)?,
-                    });
+
+                    if attr.aggregate {
+                        let item = if let Some(item) = attr.item {
+                            add_field_bound(
+                                &mut generics,
+                                ty,
+                                quote::quote!(::core::iter::FromIterator<#item>),
+                            );
+                            add_field_bound(
+                                &mut generics,
+                                &item,
+                                quote::quote!(#crate_path::rusqlite::types::FromSql),
+                            );
+                            quote::quote!(#item)
+                        } else {
+                            quote::quote!(_)
+                        };
+                        row_values.push(quote::quote! {
+                            row.get::<_, #crate_path::rusqlite::types::Value>(#index)?
+                        });
+                        group_types.push(quote::quote! {
+                            ::std::vec::Vec<#crate_path::rusqlite::types::Value>
+                        });
+                        new_group_values.push(quote::quote! {
+                            ::std::vec![value.#group_index]
+                        });
+                        let value = quote::quote_spanned! { ty.span() =>
+                            #crate_path::__private_collect_aggregate_or_use_item_attribute::<#ty, #item>(
+                                group.#group_index,
+                                #index,
+                                &aggregate_column_names[#index],
+                            )?,
+                        };
+                        values.push(value.clone());
+                        grouped_values.push(value);
+                        aggregate_fields.push(group_index);
+                    } else {
+                        add_field_bound(
+                            &mut generics,
+                            ty,
+                            quote::quote!(#crate_path::rusqlite::types::FromSql),
+                        );
+                        let value = quote::quote_spanned! { ty.span() =>
+                            row.get::<_, #ty>(#index)?
+                        };
+                        values.push(quote::quote! { #value, });
+                        row_values.push(value);
+                        group_types.push(quote::quote! { #ty });
+                        new_group_values.push(quote::quote! { value.#group_index });
+                        grouped_values.push(quote::quote! { group.#group_index, });
+                        identity_fields.push((group_index, field.ty));
+                    }
                 }
             }
 
-            (columns, quote::quote! { #name(#(#values)*) })
+            (
+                columns,
+                quote::quote! { #name(#(#values)*) },
+                quote::quote! { #name(#(#grouped_values)*) },
+            )
         }
-        syn::Fields::Unit => (vec![], quote::quote! { #name }),
+        syn::Fields::Unit => (vec![], quote::quote! { #name }, quote::quote! { #name }),
     };
 
     // SQLite still needs a result expression when every field is defaulted.
@@ -251,36 +421,112 @@ fn fetch(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     };
     let query_simple = format!("SELECT {select} FROM {source};");
     let query_with_where = format!("SELECT {select} FROM {source} WHERE ");
+
+    let aggregate = !aggregate_fields.is_empty();
+    if aggregate {
+        for (_, ty) in &identity_fields {
+            add_field_bound(&mut generics, ty, quote::quote!(::core::cmp::PartialEq));
+        }
+    }
+
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
-    Ok(quote::quote! {
-        impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
-            fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
-                conn
-                    .prepare(#query_simple)?
-                    .query_map([], |row| {
-                        Ok(#row_value)
-                    })?
-                    .collect()
+    if aggregate {
+        let comparisons = identity_fields.iter().map(|(index, _)| {
+            quote::quote! {
+                ::core::cmp::PartialEq::eq(&existing.#index, &value.#index)
             }
+        });
+        let equality = quote::quote! {
+            true #(&& #comparisons)*
+        };
+        let merge = aggregate_fields.iter().map(|index| {
+            quote::quote! {
+                existing.#index.push(value.#index);
+            }
+        });
+        let merge: Vec<_> = merge.collect();
+        let collect_rows = quote::quote! {
+            let mut values: ::std::vec::Vec<(#(#group_types,)*)> =
+                ::std::vec::Vec::new();
+            while let Some(row) = rows.next()? {
+                let value = (#(#row_values,)*);
+                if let Some(existing) = values.iter_mut().find(|existing| #equality) {
+                    #(#merge)*
+                } else {
+                    values.push((#(#new_group_values,)*));
+                }
+            }
+            values
+                .into_iter()
+                .map(|group| -> #crate_path::rusqlite::Result<Self> {
+                    Ok(#grouped_value)
+                })
+                .collect()
+        };
 
-            fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
-                conn: &#crate_path::rusqlite::Connection,
-                filter: &str,
-                params: P,
-            ) -> #crate_path::rusqlite::Result<Vec<Self>> {
-                let mut query = ::std::string::String::from(#query_with_where);
-                query.push_str(filter);
-                query.push(';');
-                conn
-                    .prepare(&query)?
-                    .query_map(params, |row| {
-                        Ok(#row_value)
-                    })?
-                    .collect()
+        Ok(quote::quote! {
+            impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
+                fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
+                    let mut statement = conn.prepare(#query_simple)?;
+                    let aggregate_column_names: Vec<::std::string::String> = statement
+                        .column_names()
+                        .into_iter()
+                        .map(::std::borrow::ToOwned::to_owned)
+                        .collect();
+                    let mut rows = statement.query([])?;
+                    #collect_rows
+                }
+
+                fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
+                    conn: &#crate_path::rusqlite::Connection,
+                    filter: &str,
+                    params: P,
+                ) -> #crate_path::rusqlite::Result<Vec<Self>> {
+                    let mut query = ::std::string::String::from(#query_with_where);
+                    query.push_str(filter);
+                    query.push(';');
+                    let mut statement = conn.prepare(&query)?;
+                    let aggregate_column_names: Vec<::std::string::String> = statement
+                        .column_names()
+                        .into_iter()
+                        .map(::std::borrow::ToOwned::to_owned)
+                        .collect();
+                    let mut rows = statement.query(params)?;
+                    #collect_rows
+                }
             }
-        }
-    })
+        })
+    } else {
+        Ok(quote::quote! {
+            impl #impl_generics #crate_path::RusqliteFetch for #name #type_generics #where_clause {
+                fn fetch(conn: &#crate_path::rusqlite::Connection) -> #crate_path::rusqlite::Result<Vec<Self>> {
+                    conn
+                        .prepare(#query_simple)?
+                        .query_map([], |row| {
+                            Ok(#row_value)
+                        })?
+                        .collect()
+                }
+
+                fn fetch_with_filter<P: #crate_path::rusqlite::Params>(
+                    conn: &#crate_path::rusqlite::Connection,
+                    filter: &str,
+                    params: P,
+                ) -> #crate_path::rusqlite::Result<Vec<Self>> {
+                    let mut query = ::std::string::String::from(#query_with_where);
+                    query.push_str(filter);
+                    query.push(';');
+                    conn
+                        .prepare(&query)?
+                        .query_map(params, |row| {
+                            Ok(#row_value)
+                        })?
+                        .collect()
+                }
+            }
+        })
+    }
 }
 
 struct WriteField {
@@ -319,7 +565,7 @@ fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     .ident
                     .clone()
                     .expect("fields were checked to be named");
-                let attr = RusqliteField::from_attributes(&field.attrs)?;
+                let attr = field_attributes(&field.attrs)?;
                 validate_skip_combination(&field, &attr)?;
 
                 if attr.skip_write {
@@ -357,7 +603,7 @@ fn write(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         }
         syn::Fields::Unnamed(fields) => {
             for (index, field) in fields.unnamed.into_iter().enumerate() {
-                let attr = RusqliteField::from_attributes(&field.attrs)?;
+                let attr = field_attributes(&field.attrs)?;
                 validate_skip_combination(&field, &attr)?;
 
                 if attr.skip_write {
@@ -561,10 +807,19 @@ fn add_field_bound(
     ty: &syn::Type,
     trait_path: proc_macro2::TokenStream,
 ) {
-    use quote::ToTokens;
-
     // A concrete field is checked at the generated operation whose span is the
     // field type. Only generic-dependent fields need an impl bound.
+    if !field_uses_generic(generics, ty) {
+        return;
+    }
+
+    let predicate = syn::parse_quote_spanned! {ty.span()=> #ty: #trait_path};
+    generics.make_where_clause().predicates.push(predicate);
+}
+
+fn field_uses_generic(generics: &syn::Generics, ty: &syn::Type) -> bool {
+    use quote::ToTokens;
+
     let parameter_names: Vec<_> = generics
         .params
         .iter()
@@ -574,12 +829,7 @@ fn add_field_bound(
             syn::GenericParam::Const(parameter) => parameter.ident.to_string(),
         })
         .collect();
-    if !contains_parameter(ty.to_token_stream(), &parameter_names) {
-        return;
-    }
-
-    let predicate = syn::parse_quote_spanned! {ty.span()=> #ty: #trait_path};
-    generics.make_where_clause().predicates.push(predicate);
+    contains_parameter(ty.to_token_stream(), &parameter_names)
 }
 
 fn contains_parameter(tokens: proc_macro2::TokenStream, parameters: &[String]) -> bool {

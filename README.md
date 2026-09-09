@@ -102,6 +102,8 @@ Field attributes:
 | `#[rusqlite(column = "...")]` | Sets the column used for writes and as the default read expression.     |
 | `#[rusqlite(select = "...")]` | Overrides the read expression.                                          |
 | `#[rusqlite(read_default)]`   | Omits the field from reads and uses `Default::default()`.               |
+| `#[rusqlite(aggregate)]`      | Collects one selected value per row while grouping equal records.       |
+| `aggregate(item = Type)`      | Specifies an aggregate item type when it cannot be inferred.            |
 | `#[rusqlite(key)]`            | Includes the field in update predicates and the upsert conflict target. |
 | `#[rusqlite(skip_insert)]`    | Omits the field from inserts and the insert path of upserts.            |
 | `#[rusqlite(skip_update)]`    | Omits a non-key field from update assignments.                          |
@@ -157,6 +159,38 @@ struct UserWithTeam {
     team_name: String,
 }
 ```
+
+### Aggregated fields
+
+Mark a collection field with `aggregate` to combine one-to-many query rows into records:
+
+```rust
+use std::collections::BTreeSet;
+
+#[derive(RusqliteFetch)]
+#[rusqlite(from = "users AS u JOIN user_tags AS t ON t.user_id = u.id")]
+struct UserTags {
+    #[rusqlite(select = "u.id")]
+    user_id: i64,
+    #[rusqlite(select = "t.tag", aggregate)]
+    tags: BTreeSet<String>,
+}
+```
+
+Each SQL row contributes one selected value to every aggregated field. Rows whose selected, non-aggregated fields compare equal are combined, so those field types must implement `PartialEq`. `read_default` fields do not participate in that comparison. `Vec<T>` preserves the SQL row order and duplicates; `BTreeSet<T>` sorts and deduplicates. Use an `ORDER BY` clause when vector order matters.
+
+Aggregation is not limited to iterable collection types. The field type only needs to implement `FromIterator<T>` for an item type `T` that implements `FromSql`, so custom accumulators that consume values without storing or yielding them are supported. This also works directly with standard collections such as `Vec`, `VecDeque`, `LinkedList`, `BTreeSet`, and `HashSet`. For a nullable value from a `LEFT JOIN`, use a collection such as `Vec<Option<T>>`; aggregation does not implicitly discard `NULL`.
+
+The macro asks Rust to infer `T` from the field type. Specify it explicitly when the field type is generic or has multiple applicable `FromIterator` implementations:
+
+```rust
+#[rusqlite(select = "t.value", aggregate(item = i64))]
+total: Accumulator,
+```
+
+For this example, the generated implementation requires `Accumulator: FromIterator<i64>` and `i64: FromSql`.
+
+Aggregation happens in memory after executing the ordinary generated `SELECT`; it does not add a SQL `GROUP BY`. The result groups preserve the order in which their first rows occur. On a struct that also derives `RusqliteWrite`, an aggregated projection normally needs `skip_write` because the collection itself is not a writable SQLite value.
 
 ### Filtering safely
 
@@ -250,7 +284,7 @@ Generic parameters and existing `where` clauses are preserved. The derives add b
 
 ## Limitations
 
-- Fetch helpers collect all matching rows into a `Vec`.
+- Fetch helpers materialize all matching SQL rows; aggregated fields are grouped in memory.
 - Writes operate on complete records; there are no partial updates or batches.
 - There is no `RETURNING` helper or automatic hydration of generated values.
 - Deletes, migrations, relationships, optimistic locking, and schema management remain the application's responsibility.

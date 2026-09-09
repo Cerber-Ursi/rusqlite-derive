@@ -1,0 +1,22 @@
+error[E0277]: cannot infer an aggregate item type; use `#[rusqlite(aggregate(item = Type))]`
+ --> tests/ui/fail/aggregate_generic_missing_item.rs:7:13
+  |
+7 |     values: C,
+  |             ^ the trait `FromIterator<_>` is not implemented for `C`
+  |
+help: the trait `rusqlite_derive::__Aggregate<Item>` is conditionally implemented for `C`
+ --> src/lib.rs
+  |
+  | impl<C, Item> __Aggregate<Item> for C where C: FromIterator<Item> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------
+  |                                                |
+  |                                                unsatisfied requirement introduced here: `C: FromIterator<_>`
+  = note: required for `C` to implement `rusqlite_derive::__Aggregate<_>`
+note: required by a bound in `rusqlite_derive::__private_collect_aggregate_or_use_item_attribute`
+ --> src/lib.rs
+  |
+  | pub fn __private_collect_aggregate_or_use_item_attribute<C, T>(
+  |        ------------------------------------------------- required by a bound in this function
+...
+  |     C: __Aggregate<T>,
+  |        ^^^^^^^^^^^^^^ required by this bound in `__private_collect_aggregate_or_use_item_attribute`
