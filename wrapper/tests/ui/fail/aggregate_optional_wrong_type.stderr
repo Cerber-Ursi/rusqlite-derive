@@ -1,0 +1,21 @@
+error[E0277]: an optional aggregate field must be `Option<C>` where `C: FromIterator<Item>`
+ --> tests/ui/fail/aggregate_optional_wrong_type.rs:7:13
+  |
+7 |     values: Vec<String>,
+  |             ^^^^^^^^^^^ the trait `rusqlite_derive::__OptionalAggregate<String>` is not implemented for `Vec<String>`
+  |
+help: the trait `rusqlite_derive::__OptionalAggregate<Item>` is implemented for `Option<C>`
+ --> src/lib.rs
+  |
+  | / impl<C, Item> __OptionalAggregate<Item> for Option<C>
+  | | where
+  | |     C: FromIterator<Item>,
+  | |__________________________^
+note: required by a bound in `rusqlite_derive::__private_collect_optional_aggregate`
+ --> src/lib.rs
+  |
+  | pub fn __private_collect_optional_aggregate<O, T>(
+  |        ------------------------------------ required by a bound in this function
+...
+  |     O: __OptionalAggregate<T>,
+  |        ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__private_collect_optional_aggregate`

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Aggregated `RusqliteFetch` fields now support null-aware collection shapes: ordinary collections omit SQL `NULL` values rejected with `FromSqlError::InvalidType`, item types such as `Option<T>` retain nulls, and `aggregate(optional)` maps all-null groups to `None` for optional collections, including type aliases. Other attempted conversion errors remain visible.
+
 ## [1.0.1] - 2026-09-09
 
 ### Added
