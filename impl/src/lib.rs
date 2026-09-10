@@ -13,9 +13,13 @@ use syn::{ext::IdentExt, spanned::Spanned};
 /// with a complete `FROM` fragment. Named fields default to their Rust names;
 /// `select` sets a read expression, `column` sets a storage column and default
 /// read expression, `read_default` omits a field from reads and initializes it
-/// with `Default::default()`, and `aggregate` collects a selected value across
-/// rows with equal non-aggregated fields. `aggregate(item = Type)` specifies
-/// the `FromIterator` item type when Rust cannot infer it.
+/// with `Default::default()`, and `aggregate` collects selected values across
+/// rows with equal non-aggregated fields. During item conversion, SQL `NULL`
+/// values rejected with `FromSqlError::InvalidType` are omitted, item types
+/// such as `Option<T>` retain nulls, and other errors are returned.
+/// `aggregate(optional)` handles an all-null group as `None` for an optional
+/// collection, while `aggregate(item = Type)` specifies the `FromIterator`
+/// item type when Rust cannot infer it.
 ///
 /// # Renaming the dependency
 ///
@@ -140,6 +144,7 @@ struct RusqliteField {
     #[attribute(conflicts = [read_default])]
     aggregate: bool,
     item: Option<syn::Type>,
+    optional: bool,
     key: bool,
     #[attribute(conflicts = [skip_write])]
     skip_insert: bool,
@@ -254,6 +259,12 @@ impl<'a> FetchMappingBuilder<'a> {
                 "`item` requires `aggregate`",
             ));
         }
+        if attr.optional && !attr.aggregate {
+            return Err(syn::Error::new_spanned(
+                &field,
+                "`optional` requires `aggregate`",
+            ));
+        }
 
         let ty = field.ty.clone();
         if attr.read_default {
@@ -285,7 +296,8 @@ impl<'a> FetchMappingBuilder<'a> {
 
         let crate_path = self.crate_path;
         let (row_value, grouped_value) = if attr.aggregate {
-            let item = aggregate_item_type(self.generics, &ty, attr.item, crate_path);
+            let item =
+                aggregate_item_type(self.generics, &ty, attr.item, attr.optional, crate_path);
             self.row_values.push(quote::quote! {
                 row.get::<_, #crate_path::rusqlite::types::Value>(#column_index)?
             });
@@ -296,8 +308,13 @@ impl<'a> FetchMappingBuilder<'a> {
                 ::std::vec![value.#group_index]
             });
             self.aggregate_fields.push(group_index.clone());
+            let collect = if attr.optional {
+                quote::quote!(#crate_path::__private_collect_optional_aggregate)
+            } else {
+                quote::quote!(#crate_path::__private_collect_aggregate_or_use_item_attribute)
+            };
             let value = quote::quote_spanned! { ty.span() =>
-                #crate_path::__private_collect_aggregate_or_use_item_attribute::<#ty, #item>(
+                #collect::<#ty, #item>(
                     group.#group_index,
                     #column_index,
                     &aggregate_column_names[#column_index],
@@ -351,17 +368,19 @@ fn aggregate_item_type(
     generics: &mut syn::Generics,
     collection: &syn::Type,
     item: Option<syn::Type>,
+    optional: bool,
     crate_path: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let Some(item) = item else {
         return quote::quote!(_);
     };
 
-    add_field_bound(
-        generics,
-        collection,
-        quote::quote!(::core::iter::FromIterator<#item>),
-    );
+    let collection_bound = if optional {
+        quote::quote!(#crate_path::__OptionalAggregate<#item>)
+    } else {
+        quote::quote!(::core::iter::FromIterator<#item>)
+    };
+    add_field_bound(generics, collection, collection_bound);
     add_field_bound(
         generics,
         &item,

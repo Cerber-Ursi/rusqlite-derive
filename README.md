@@ -103,8 +103,9 @@ Field attributes:
 | `#[rusqlite(column = "...")]`            | Sets the column used for writes and as the default read expression.     |
 | `#[rusqlite(select = "...")]`            | Overrides the read expression.                                          |
 | `#[rusqlite(read_default)]`              | Omits the field from reads and uses `Default::default()`.               |
-| `#[rusqlite(aggregate)]`                 | Collects one selected value per row while grouping equal records.       |
+| `#[rusqlite(aggregate)]`                 | Accumulates selected values while grouping equal records.               |
 | `#[rusqlite(aggregate(item = Type))]`    | Specifies the aggregate item type when Rust cannot infer it.            |
+| `#[rusqlite(aggregate(optional))]`       | Maps an all-null group to `None` for an optional collection.             |
 | `#[rusqlite(key)]`                       | Includes the field in update predicates and the upsert conflict target. |
 | `#[rusqlite(skip_insert)]`               | Omits the field from inserts and the insert path of upserts.            |
 | `#[rusqlite(skip_update)]`               | Omits a non-key field from update assignments.                          |
@@ -142,7 +143,7 @@ For the quick-start model, `fetch` generates:
 SELECT id, display_name, active FROM users;
 ```
 
-Selected values are decoded with `rusqlite::Row::get` in field declaration order. Selected field types must implement `FromSql`.
+Non-aggregated selected values are decoded with `rusqlite::Row::get` in field declaration order. Their field types must implement `FromSql`; aggregated fields instead decode their inferred or configured item type.
 
 ### Projections and joins
 
@@ -178,11 +179,28 @@ struct UserTags {
 }
 ```
 
-Each SQL row contributes one selected value to every aggregated field. Rows are combined when all their selected, non-aggregated fields compare equal, so those field types must implement `PartialEq`. If there are no such fields, all rows form one record. Fields marked `read_default` do not participate in the comparison.
+Each SQL row provides one candidate value for every aggregated field. Rows are combined when all their selected, non-aggregated fields compare equal, so those field types must implement `PartialEq`. If there are no such fields, all rows form one record. Fields marked `read_default` do not participate in the comparison.
 
 The collection controls ordering and deduplication. For example, `Vec<T>` preserves SQL row order and duplicates, while `BTreeSet<T>` sorts and deduplicates. Use an `ORDER BY` clause when vector order matters.
 
-The field type only needs to implement `FromIterator<T>` for an item type `T` that implements `FromSql`. Standard collections such as `Vec`, `VecDeque`, `LinkedList`, `BTreeSet`, and `HashSet` work directly, as do custom accumulators that consume values without storing or yielding them. For nullable values from a `LEFT JOIN`, use a collection such as `Vec<Option<T>>`; aggregation does not implicitly discard `NULL`.
+The field type only needs to implement `FromIterator<T>` for an item type `T` that implements `FromSql`. Standard collections such as `Vec`, `VecDeque`, `LinkedList`, `BTreeSet`, and `HashSet` work directly, as do custom accumulators that consume values without storing or yielding them.
+
+Null handling follows the aggregate item conversion:
+
+- a successful conversion is retained, so `Vec<Option<String>>` includes `None` entries;
+- `FromSqlError::InvalidType` for a SQL `NULL` omits that value, so an unmatched `LEFT JOIN` produces an empty `Vec<String>`;
+- any other attempted conversion error fails the fetch.
+
+Use `aggregate(optional)` for an optional collection:
+
+```rust
+#[rusqlite(select = "t.tag", aggregate(optional))]
+tags: Option<Vec<String>>,
+```
+
+This handles an all-null group before item conversion and produces `None`. A group containing any non-null value produces `Some(collection)` and follows the item conversion rules above. The forms therefore compose: an `Option<Vec<Option<String>>>` field marked `aggregate(optional)` is `None` for an all-null group, while a mixed group is `Some` and retains its inner `None` entries. The explicit option also works when the field uses a type alias for `Option<Collection>`.
+
+Without `optional`, an `Option<Collection>` field is an ordinary `FromIterator` accumulator; it receives no special treatment from the derive. For example, the standard `FromIterator<Option<T>> for Option<Collection<T>>` produces `None` if any item is `None`.
 
 The macro asks Rust to infer `T` from the field type. Specify it explicitly when the field type is generic or has multiple applicable `FromIterator` implementations:
 
@@ -191,7 +209,7 @@ The macro asks Rust to infer `T` from the field type. Specify it explicitly when
 total: Accumulator,
 ```
 
-For this example, the generated implementation requires `Accumulator: FromIterator<i64>` and `i64: FromSql`.
+For this example, the generated implementation requires `Accumulator: FromIterator<i64>` and `i64: FromSql`. With `aggregate(optional)`, the field must be `Option<Accumulator>` and the same bounds apply to the inner `Accumulator` type.
 
 Aggregation happens in memory after executing the ordinary generated `SELECT`; it does not add a SQL `GROUP BY`. The result groups preserve the order in which their first rows occur. On a struct that also derives `RusqliteWrite`, an aggregated projection normally needs `skip_write` because the collection itself is not a writable SQLite value.
 

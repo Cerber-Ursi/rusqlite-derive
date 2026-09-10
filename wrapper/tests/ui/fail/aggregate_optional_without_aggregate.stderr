@@ -1,0 +1,6 @@
+error: `optional` requires `aggregate`
+ --> tests/ui/fail/aggregate_optional_without_aggregate.rs:5:5
+  |
+5 | /     #[rusqlite(optional)]
+6 | |     values: Option<Vec<String>>,
+  | |_______________________________^

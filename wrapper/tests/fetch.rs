@@ -1,4 +1,10 @@
-use rusqlite_derive::{RusqliteFetch, rusqlite::Connection};
+use rusqlite_derive::{
+    RusqliteFetch,
+    rusqlite::{
+        Connection,
+        types::{FromSql, FromSqlError, FromSqlResult, ValueRef},
+    },
+};
 use std::{
     collections::{BTreeSet, VecDeque},
     marker::PhantomData,
@@ -89,6 +95,21 @@ impl FromIterator<i64> for Sum {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, PartialEq)]
+struct StrictString(String);
+
+impl FromSql for StrictString {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Null => Err(FromSqlError::Other(Box::new(std::io::Error::other(
+                "null is invalid for StrictString",
+            )))),
+            value => String::column_result(value).map(Self),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, RusqliteFetch)]
 #[rusqlite(from = "parents AS p JOIN children AS c ON c.parent_id = p.id")]
 struct ParentWithChildren {
@@ -113,6 +134,37 @@ struct GenericParent<C> {
     id: i64,
     #[rusqlite(select = "c.value", aggregate(item = String))]
     children: C,
+}
+
+type OptionalChildren = Option<Vec<String>>;
+
+#[derive(Debug, PartialEq, RusqliteFetch)]
+#[rusqlite(from = "parents AS p LEFT JOIN children AS c ON c.parent_id = p.id")]
+struct ParentWithOptionalChildren {
+    #[rusqlite(select = "p.id")]
+    id: i64,
+    #[rusqlite(select = "c.value", aggregate)]
+    children: Vec<String>,
+    #[rusqlite(select = "c.value", aggregate(optional))]
+    optional_children: Option<Vec<String>>,
+    #[rusqlite(select = "c.value", aggregate)]
+    nullable_children: Vec<Option<String>>,
+    #[rusqlite(select = "c.value", aggregate(optional))]
+    optional_nullable_children: Option<Vec<Option<String>>>,
+    #[rusqlite(select = "c.value", aggregate(optional))]
+    aliased_optional_children: OptionalChildren,
+    #[rusqlite(select = "c.value", aggregate)]
+    ordinary_option_accumulator: Option<Vec<String>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, RusqliteFetch)]
+#[rusqlite(from = "parents AS p LEFT JOIN children AS c ON c.parent_id = p.id")]
+struct ParentWithStrictChildren {
+    #[rusqlite(select = "p.id")]
+    id: i64,
+    #[rusqlite(select = "c.value", aggregate)]
+    children: Vec<StrictString>,
 }
 
 fn records_connection() -> Connection {
@@ -459,6 +511,67 @@ fn aggregate_fields_combine_rows_by_non_aggregated_values() {
             children: vec!["beta".into(), "alpha".into(), "alpha".into()],
         }]
     );
+}
+
+#[test]
+fn aggregate_fields_handle_nulls_from_left_joins() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY);
+         CREATE TABLE children (parent_id INTEGER NOT NULL, value TEXT);
+         INSERT INTO parents VALUES (1), (2);
+         INSERT INTO children VALUES (1, 'first'), (1, NULL), (1, 'second');",
+    )
+    .unwrap();
+
+    let records =
+        ParentWithOptionalChildren::fetch_with_filter(&conn, "1 ORDER BY p.id, c.rowid", [])
+            .unwrap();
+
+    assert_eq!(
+        records,
+        vec![
+            ParentWithOptionalChildren {
+                id: 1,
+                children: vec!["first".into(), "second".into()],
+                optional_children: Some(vec!["first".into(), "second".into()]),
+                nullable_children: vec![Some("first".into()), None, Some("second".into())],
+                optional_nullable_children: Some(vec![
+                    Some("first".into()),
+                    None,
+                    Some("second".into()),
+                ]),
+                aliased_optional_children: Some(vec!["first".into(), "second".into()]),
+                ordinary_option_accumulator: None,
+            },
+            ParentWithOptionalChildren {
+                id: 2,
+                children: Vec::new(),
+                optional_children: None,
+                nullable_children: vec![None],
+                optional_nullable_children: None,
+                aliased_optional_children: None,
+                ordinary_option_accumulator: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn aggregate_fields_return_custom_null_conversion_errors() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY);
+         CREATE TABLE children (parent_id INTEGER NOT NULL, value TEXT);
+         INSERT INTO parents VALUES (1);",
+    )
+    .unwrap();
+
+    let error = ParentWithStrictChildren::fetch(&conn).unwrap_err();
+    assert!(matches!(
+        error,
+        rusqlite::Error::FromSqlConversionFailure(_, rusqlite::types::Type::Null, _)
+    ));
 }
 
 #[test]
