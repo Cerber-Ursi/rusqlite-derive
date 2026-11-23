@@ -16,7 +16,6 @@ note: required for `Record<NotDefault>` to implement `RusqliteFetch`
    |          ------------- type parameter would need to implement `RusqliteFetch`
  6 | struct Record<T> {
    |        ^^^^^^^^^
-   = help: consider manually implementing `RusqliteFetch` to avoid undesired bounds
 note: required by a bound in `require_fetch`
   --> tests/ui/fail/generic_missing_default.rs:12:21
    |

@@ -337,3 +337,18 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 python3 scripts/rusqlite_compat.py matrix
 python3 scripts/rusqlite_compat.py update
 ```
+
+### Compiler diagnostic snapshots
+
+Trybuild compares compiler diagnostics against the `.stderr` snapshots in `wrapper/tests/ui/fail`. Stable Rust updates can change diagnostic wording or source context without changing whether an example compiles. The stable CI jobs compare snapshots strictly; the MSRV job still requires the expected compile successes and failures, but overwrites snapshots because its compiler emits different diagnostics.
+
+If a stable compiler update changes only the expected diagnostic text, refresh the snapshots locally and review the diff before committing:
+
+```sh
+rustup update stable
+TRYBUILD=overwrite cargo +stable test --locked -p rusqlite-derive --test ui --all-features
+git diff -- wrapper/tests/ui/fail
+cargo +stable test --locked -p rusqlite-derive --test ui --all-features
+```
+
+After a stable CI or release test failure, a diagnostic-only step reruns the UI tests in overwrite mode and prints a unified `git diff` of the snapshots. The original test failure remains a failure, and the regenerated snapshots are not committed automatically.

@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Support rusqlite releases from 0.40.2 up to, but not including, 0.44, while retaining Rust 1.85 support with rusqlite 0.40.2.
 
+### Fixed
+
+- Refresh compile-fail diagnostic snapshots for Rust 1.100.0 and print unified snapshot diffs after CI test failures to make future diagnostic changes easier to review.
+
 ## [1.1.0] - 2026-09-10
 
 ### Changed

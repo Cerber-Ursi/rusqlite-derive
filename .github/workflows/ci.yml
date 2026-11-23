@@ -41,7 +41,14 @@ jobs:
         run: cargo update --package rusqlite --precise "$RUSQLITE_VERSION"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace --all-targets --all-features
+      - id: tests
+        run: cargo test --locked --workspace --all-targets --all-features
+      - name: Show diagnostic snapshot diffs
+        if: failure() && steps.tests.outcome == 'failure'
+        run: |
+          # Keep the original test failure; regenerate only to display a diff.
+          TRYBUILD=overwrite cargo test --locked -p rusqlite-derive --test ui --all-features || true
+          git diff --color=always -- wrapper/tests/ui/fail
       - run: cargo test --locked --workspace --doc --all-features
 
   msrv:
