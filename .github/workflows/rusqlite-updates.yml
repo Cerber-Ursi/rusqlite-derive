@@ -1,0 +1,44 @@
+name: Monitor rusqlite releases
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rusqlite-compatibility-updates
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Propose compatibility updates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - run: python3 scripts/rusqlite_compat.py update
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          branch: automation/rusqlite-compatibility
+          delete-branch: true
+          commit-message: "chore: update rusqlite compatibility coverage"
+          title: "Update rusqlite compatibility coverage"
+          draft: always-true
+          add-paths: |
+            wrapper/Cargo.toml
+            .github/rusqlite-versions.json
+          body: |
+            Proposes compatibility coverage for new stable, non-yanked rusqlite releases from crates.io.
+
+            - Preserves the existing minimum dependency version.
+            - Raises the upper bound when a release falls outside the supported range.
+            - Tests the first and latest supported release in each minor line.
+
+            Review upstream breaking changes and add an Unreleased changelog entry before merging.
+            Mark this draft **ready for review** to run the full compatibility CI matrix.
+            The default GitHub Actions token does not trigger CI when it creates or updates a pull request.

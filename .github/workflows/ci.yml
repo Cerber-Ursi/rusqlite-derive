@@ -3,23 +3,46 @@ name: CI
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 jobs:
-  stable:
-    name: Stable
+  compatibility:
+    name: Compatibility configuration
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.matrix.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - id: matrix
+        run: |
+          versions="$(python3 scripts/rusqlite_compat.py matrix)"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+
+  stable:
+    name: Stable / rusqlite ${{ matrix.rusqlite }}
+    needs: compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rusqlite: ${{ fromJSON(needs.compatibility.outputs.versions) }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Select rusqlite release
+        env:
+          RUSQLITE_VERSION: ${{ matrix.rusqlite }}
+        run: cargo update --package rusqlite --precise "$RUSQLITE_VERSION"
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-targets --all-features
-      - run: cargo test --workspace --doc --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-targets --all-features
+      - run: cargo test --locked --workspace --doc --all-features
 
   msrv:
     name: Rust 1.85
@@ -27,9 +50,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
+      - run: cargo update --package rusqlite --precise 0.40.2
       # Compiler diagnostics vary between the MSRV and stable. Overwrite mode
       # still requires compile-fail cases to fail, but does not compare snapshots.
-      - run: cargo test --workspace --all-targets --all-features
+      - run: cargo test --locked --workspace --all-targets --all-features
         env:
           TRYBUILD: overwrite
-      - run: cargo test --workspace --doc --all-features
+      - run: cargo test --locked --workspace --doc --all-features

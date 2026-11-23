@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A pinned rusqlite compatibility CI matrix and a daily release monitor that proposes dependency-bound and matrix updates in draft pull requests.
+
+### Changed
+
+- Support rusqlite releases from 0.40.2 up to, but not including, 0.44, while retaining Rust 1.85 support with rusqlite 0.40.2.
+
 ## [1.1.0] - 2026-09-10
 
 ### Changed

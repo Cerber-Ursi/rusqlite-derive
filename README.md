@@ -24,7 +24,15 @@ If your system does not provide SQLite, enable the forwarded `bundled` feature:
 rusqlite-derive = { version = "1", features = ["bundled"] }
 ```
 
-You can also depend directly on a compatible `rusqlite` 0.40 release when you need features that `rusqlite-derive` does not forward. Cargo will unify the dependency and its enabled features.
+You can also depend directly on a `rusqlite` version within the range declared in [`wrapper/Cargo.toml`](wrapper/Cargo.toml) to select a release line or enable features that `rusqlite-derive` does not forward. The direct dependency and wrapper must resolve to the same rusqlite version to share types and features. Prefer the re-export when you do not need a direct dependency.
+
+Cargo can sometimes retain multiple rusqlite versions despite overlapping requirements. If `cargo tree --duplicates` shows a mismatch, unify the wrapper's locked selection with your direct dependency. For example, to select 0.42.0 instead of 0.43.0:
+
+```sh
+cargo update --package rusqlite@0.43.0 --precise 0.42.0
+```
+
+Rust 1.85 is supported with rusqlite 0.40.2. Selecting a newer rusqlite release may require a newer Rust compiler and system SQLite version. The `bundled` feature avoids depending on the system SQLite version.
 
 ### Renaming the dependency
 
@@ -313,3 +321,19 @@ Generic parameters and existing `where` clauses are preserved. The derives add b
 - Deletes, migrations, relationships, optimistic locking, and schema management remain the application's responsibility.
 - SQL identifiers and fragments are neither parsed, validated, nor quoted. Inferred raw Rust identifiers have their `r#` prefix removed, but names that are SQLite keywords still need an explicit quoted `column` fragment.
 - Schema mismatches, missing unique constraints, and constraint violations are reported by SQLite at runtime.
+
+## Maintaining rusqlite compatibility
+
+CI pins each release listed in [`.github/rusqlite-versions.json`](.github/rusqlite-versions.json) before running Clippy, integration tests, compile-pass/compile-fail tests, and doctests. Rust 1.85 is tested separately with rusqlite 0.40.2. The committed lockfile retains that minimum dependency version.
+
+The [release monitor](.github/workflows/rusqlite-updates.yml) checks crates.io daily and can also be run manually from GitHub Actions. It opens or updates a draft pull request that widens both dependency upper bounds when necessary and updates the matrix to cover the first and latest supported release in each minor line. It ignores prereleases and yanked releases when adding coverage and never raises the minimum dependency version or merges changes automatically.
+
+Enable **Allow GitHub Actions to create and approve pull requests** under the repository's **Settings → Actions → General → Workflow permissions**. No additional token is needed. Because pull requests created with `GITHUB_TOKEN` do not trigger CI automatically, mark the draft **ready for review** to run the compatibility matrix. Subsequent automated changes return the pull request to draft, requiring another review and CI run.
+
+To validate or update the compatibility configuration locally:
+
+```sh
+python3 -m unittest discover -s scripts -p 'test_*.py'
+python3 scripts/rusqlite_compat.py matrix
+python3 scripts/rusqlite_compat.py update
+```
